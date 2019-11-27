@@ -26,6 +26,7 @@
 #include <nanogui/textbox.h>
 #include <nanogui/tabwidget.h>
 #include <surface_mesh/Surface_mesh.h>
+#include <random> // Added just to test temperature there
 
 #if defined(__GNUC__)
 #  pragma GCC diagnostic ignored "-Wmissing-field-initializers"
@@ -56,6 +57,7 @@ using std::to_string;
 using std::min;
 using std::max;
 using namespace surface_mesh;
+using surface_mesh::Color;
 using namespace nanogui;
 
 typedef unsigned long Index;
@@ -164,6 +166,68 @@ public:
         return m_current_vertex_status;
     }
 
+    /** NEW: Updates temperature of selected vertices with provided temperature**/
+    /**
+     * Sets the temperature of the selected vertices to the float passed as argument
+     * @param temperature Float value with which to update temperature of selected vertices
+     */
+    void setSelectedVerticesTemperature(const float temperature){
+        Surface_mesh::Vertex_property<Scalar> v_temperature =
+                mesh.vertex_property<Scalar>("v:temperature",0.0);
+        Surface_mesh::Vertex_property<surface_mesh::Color> v_color_temperature =
+                mesh.vertex_property<surface_mesh::Color>("v:color_temperature",
+                                                          surface_mesh::Color(1.0f, 1.0f, 1.0f));
+
+        /** The loop is only made on the selected vertices*/
+        auto vtcs = mesh.vertices().begin();
+        for(auto id : m_selectedVertices){
+            vtcs = mesh.vertices().begin(); // it is necessary to reset to begin at every iteration for the next method to work
+            /** Finding back the edge corresponding to the selected edge can be done through this iterator "hack" (note it is invariant to ordering of selected vertices)*/
+            for(int j = 0; j < id ; ++j){
+                vtcs.operator++();
+            }
+            auto v = *vtcs;
+
+            /** Update the relevant temperature quantities at last */
+            v_temperature[v] = temperature;
+            set_color(v, value_to_color(temperature, c_min_value, c_max_value), v_color_temperature);
+            m_color_temperature_.col(id) <<  v_color_temperature[v].x,
+                    v_color_temperature[v].y,
+                    v_color_temperature[v].z;
+            m_reupload_vertex_colors = true;
+        }
+    }
+
+    /** NEW: Toggles the source status for selected vertex **/
+    /**
+     * Among the selected vertices, make all non-source vertices as vertices and make source as non-sources
+     * Also updates the corresponding display nodes (sources are displayed as red dots, others are not displayed outside of selection)
+     */
+    void toggleTemperatureSourceSelectedVertices(){
+        Surface_mesh::Vertex_property<bool> v_is_source = mesh.vertex_property<bool>("v:is_source", false);
+        auto vtcs = mesh.vertices().begin();
+        for(auto id: m_selectedVertices){
+            // same hack as setSelectedVerticesTemperature
+            vtcs = mesh.vertices().begin();
+            for(int j = 0; j < id ; ++j){
+                vtcs.operator++();
+            }
+            auto v = *vtcs;
+            /** Flip the source boolean*/
+            v_is_source[v] =! v_is_source[v];
+            /** Updates the display: a source is displayed in red, otherwise it is not displayed*/
+            if(v_is_source[v]){
+                m_updated_vertex_sources.col(id) = Vector3f( 1.0 ,0,0);
+                m_updated_vertex_selections.col(id) = Vector3f( 1.0 ,0,0);
+            } else {
+                m_updated_vertex_sources.col(id) = Vector3f(0.0, 0, 0);
+                m_updated_vertex_selections.col(id) = Vector3f(0.0, 0, 0);
+            }
+
+            m_reupload_vertex_selections = true;
+        }
+    }
+
     void updateVertexStatusVisualization() {
         m_updated_vertex_selections.setZero(3, n_vertices);
         for (Index i = 0; i < std::max(m_updated_vertex_selections.cols(), m_updated_vertex_selections.cols()); i++) {
@@ -178,7 +242,7 @@ public:
                 m_updated_vertex_selections.col(i) = Vector3f(0.0, 0.635, 0.909);
                 break;
             default:
-                m_updated_vertex_selections.col(i) = Vector3f(0., 0., 0.);
+                m_updated_vertex_selections.col(i) = m_updated_vertex_sources.col(i); /** The default display accounts for source display this way **/
             }
         }
         updateVertexSelectionVisualization();
@@ -211,9 +275,30 @@ public:
         mesh.update_face_normals();
         mesh.update_vertex_normals();
 
-		int j = 0;
+        /** NEW! Vertex temperature attribute **/
+        Surface_mesh::Vertex_property<Scalar> v_temperature =
+                mesh.vertex_property<Scalar>("v:temperature",0.0);
+
+        Surface_mesh::Vertex_property<surface_mesh::Color> v_color_temperature =
+                mesh.vertex_property<surface_mesh::Color>("v:color_temperature",
+                                                          surface_mesh::Color(1.0f, 1.0f, 1.0f));
+
+        /** Random fill of the v_temperature array**/
+        std::default_random_engine generator;
+        std::uniform_int_distribution<int> distribution(0,255);
+
+        for(auto v: mesh.vertices()){
+            v_temperature[v] = distribution(generator);
+        }
+
+        /** Converts temperature scalar to color vector **/
+        color_coding(v_temperature, &mesh, v_color_temperature,255);
+
+        int j = 0;
         MatrixXf mesh_points(3, n_vertices);
         MatrixXu indices(3, n_faces);
+        m_color_temperature_ = MatrixXf(3, n_vertices);
+        m_color_temperature_.setZero();
 
         for(auto f: mesh.faces()) {
             vector<float> vv(3.0f);
@@ -239,6 +324,11 @@ public:
             normals_attrib.col(j) << vertex_normal[v].x,
                                      vertex_normal[v].y,
                                      vertex_normal[v].z;
+            /** NEW: Temperature update**/
+            m_color_temperature_.col(j) <<  v_color_temperature[v].x,
+                                            v_color_temperature[v].y,
+                                            v_color_temperature[v].z;
+
             ++j;
         }
         m_updated_shader_verts = mesh_points;
@@ -252,6 +342,9 @@ public:
         mShader.uploadAttrib("position", mesh_points);
         mShader.uploadAttrib("normal", normals_attrib);
         mShader.uploadAttrib("color", vertex_color);
+
+        /** NEW: Temperature attrib upload **/
+        mShader.uploadAttrib("temperature_color", m_color_temperature_);
 
         // Initialize floor geom and shader
         int floor_grid_length = 50;
@@ -294,6 +387,7 @@ public:
         MatrixXf selected(3, n_vertices);
         selected.setZero();
         m_updated_vertex_selections.setZero(3, n_vertices);
+        m_updated_vertex_sources.setZero(3, n_vertices);
         m_current_vertex_status.setZero(1, n_vertices);
         mSelectedVertexShader.bind();
         mSelectedVertexShader.uploadIndices(indices);
@@ -353,6 +447,28 @@ public:
             this->wireframe =! this->wireframe;
         });
 
+        /** NEW: Button for temperature **/
+        b = new Button(window, "Temperature");
+        b->setFlags(Button::ToggleButton);
+        b->setChangeCallback([this](bool temperature){
+            this->temperature = !this->temperature;
+        });
+
+        /** NEW: Box for temperature change **/
+        Label* iterations_label = new Label(window, "Set Temperature: ");
+        FloatBox<int>* iterations_box = new FloatBox<int>(window);
+        iterations_box->setEditable(true);
+        iterations_box->setCallback([this](float temperature) {
+            setSelectedVerticesTemperature(temperature);
+        });
+
+        /** NEW: Button to do/undo source status of an edge **/
+        b = new Button(window, "Make/unmake source");
+        b->setFlags(Button::NormalButton);
+        b->setCallback([this](void){
+            toggleTemperatureSourceSelectedVertices();
+        });
+
         performLayout();
     }
 
@@ -364,11 +480,13 @@ public:
             /* Vertex shader */
             "#version 330\n"
             "uniform mat4 MV;\n"
-            "uniform mat4 P;\n"
+            "uniform mat4 P;"
+            "uniform int color_mode;\n"
 
             "in vec3 position;\n"
             "in vec3 normal;\n"
             "in vec3 color;\n"
+            "in vec3 temperature_color;\n"
 
             "out vec3 fcolor;\n"
             "out vec3 fnormal;\n"
@@ -378,7 +496,11 @@ public:
             "void main() {\n"
             "    vec4 vpoint_mv = MV * vec4(position, 1.0);\n"
             "    gl_Position = P * vpoint_mv;\n"
-            "    fcolor = color;\n"
+            "    if (color_mode == 1) {\n"
+            "        fcolor = temperature_color;\n"
+            "    } else {\n"
+            "        fcolor = color;\n"
+            "    }\n"
             "    fnormal = mat3(transpose(inverse(MV))) * normal;\n"
             "    light_dir = vec3(0.0, 3.0, 3.0) - vpoint_mv.xyz;\n"
             "    view_dir = -vpoint_mv.xyz;\n"
@@ -387,6 +509,7 @@ public:
             /* Fragment shader */
             "#version 330\n"
             "uniform vec3 intensity;\n"
+            "uniform int color_mode;\n"
 
             "in vec3 fcolor;\n"
             "in vec3 fnormal;\n"
@@ -397,18 +520,22 @@ public:
 
             "void main() {\n"
             "    vec3 c = vec3(0.0);\n"
-            "    c += vec3(1.0)*vec3(0.18, 0.1, 0.1);\n"
-            "    vec3 n = normalize(fnormal);\n"
-            "    vec3 v = normalize(view_dir);\n"
-            "    vec3 l = normalize(light_dir);\n"
-            "    float lambert = dot(n,l);\n"
-            "    if(lambert > 0.0) {\n"
-            "        c += vec3(1.0)*vec3(0.9, 0.5, 0.5)*lambert;\n"
+            "    if(color_mode == 0){ \n"
+            "        c += vec3(1.0)*vec3(0.18, 0.1, 0.1);\n"
+            "        vec3 n = normalize(fnormal);\n"
             "        vec3 v = normalize(view_dir);\n"
-            "        vec3 r = reflect(-l,n);\n"
-            "        c += vec3(1.0)*vec3(0.8, 0.8, 0.8)*pow(max(dot(r,v), 0.0), 90.0);\n"
+            "        vec3 l = normalize(light_dir);\n"
+            "        float lambert = dot(n,l);\n"
+            "        if(lambert > 0.0) {\n"
+            "            c += vec3(1.0)*vec3(0.9, 0.5, 0.5)*lambert;\n"
+            "            vec3 v = normalize(view_dir);\n"
+            "            vec3 r = reflect(-l,n);\n"
+            "            c += vec3(1.0)*vec3(0.8, 0.8, 0.8)*pow(max(dot(r,v), 0.0), 90.0);\n"
+            "        }\n"
+            "        c *= fcolor;\n"
+            "    } else {\n"
+            "        c = fcolor; \n"
             "    }\n"
-            "    c *= fcolor;\n"
             "    if (intensity == vec3(0.0)) {\n"
             "        c = intensity;\n"
             "    }\n"
@@ -635,6 +762,7 @@ public:
         updateVertexStatusVisualization();
     }
 
+
     virtual void drawContents() {
         using namespace nanogui;
 
@@ -655,6 +783,11 @@ public:
         if (m_reupload_normals) {
 			mShader.uploadAttrib("normal", m_updated_shader_normals);
 		}
+
+        /** NEW: Temperature reupload**/
+        if(m_reupload_vertex_colors){
+            mShader.uploadAttrib("temperature_color", m_color_temperature_);
+        }
 
         Eigen::Matrix4f model, view, proj;
         computeCameraMatrices(model, view, proj);
@@ -688,6 +821,13 @@ public:
             mShader.setUniform("intensity", colors);
             mShader.drawIndexed(GL_TRIANGLES, 0, n_faces);
             glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
+        }
+
+        /** NEW! Temperature update in the shader **/
+        if(temperature){
+            mShader.setUniform("color_mode", 1);
+        } else {
+            mShader.setUniform("color_mode", 0);
         }
 
         if (m_showFloor) {
@@ -737,6 +877,8 @@ public:
         m_reupload_normals = false;
         m_reupload_vertex_selections = false;
         m_reupload_vertices = false;
+        /** NEW: reset of temperature boolean reupload flag**/
+        m_reupload_vertex_colors = false;
     }
 
     bool scrollEvent(const Vector2i &p, const Vector2f &rel) {
@@ -828,6 +970,96 @@ public:
         m_selectedVertices.clear();
         updateVertexStatusVisualization();
     }
+
+    /** Method from the code framework for the lecture
+     * "Digital 3D Geometry Processing"
+     * Gaspard Zoss, Alexandru Ichim
+     * Copyright (C) 2016 by Computer Graphics and Geometry Laboratory,
+     * EPF Lausanne
+     * @param prop The property array for which to associate colors
+     * @param mesh The target mesh
+     * @param color_prop The color property array to fill
+     * @param bound The color bound
+     */
+    void color_coding(Surface_mesh::Vertex_property<Scalar> prop, Surface_mesh *mesh,
+                      Surface_mesh::Vertex_property<surface_mesh::Color> color_prop, int bound=20) {
+        // Get the value array
+        std::vector<Scalar> values = prop.vector();
+
+        // discard upper and lower bound
+        unsigned int n = values.size()-1;
+        unsigned int i = n / bound;
+        std::sort(values.begin(), values.end());
+        Scalar min_value = values[i], max_value = values[n-1-i];
+        c_min_value = min_value;
+        c_max_value = max_value;
+
+        // map values to colors
+        for (auto v: mesh->vertices())
+        {
+            set_color(v, value_to_color(prop[v], min_value, max_value), color_prop);
+        }
+    }
+
+    /** Method from the code framework for the lecture
+     * "Digital 3D Geometry Processing"
+     * Gaspard Zoss, Alexandru Ichim
+     * Copyright (C) 2016 by Computer Graphics and Geometry Laboratory,
+     * EPF Lausanne
+     * @param v Target vertex (id to update in the array)
+     * @param col The color to update in the array (value to update)
+     * @param color_prop Target array to update with color at target vertex's id
+     */
+    void set_color(Surface_mesh::Vertex v, const surface_mesh::Color& col,
+                                   Surface_mesh::Vertex_property<surface_mesh::Color> color_prop)
+    {
+        color_prop[v] = col;
+    }
+
+    /** Method from the code framework for the lecture
+     * "Digital 3D Geometry Processing"
+     * Gaspard Zoss, Alexandru Ichim
+     * Copyright (C) 2016 by Computer Graphics and Geometry Laboratory,
+     * EPF Lausanne
+     * @param value Scalar value to translate to an RGB triplet
+     * @param min_value Lower bound of the color
+     * @param max_value Upper bound of the color
+     * @return The RGB-converted scalar value
+     */
+    surface_mesh::Color value_to_color(Scalar value, Scalar min_value, Scalar max_value) {
+        Scalar v0, v1, v2, v3, v4;
+        v0 = min_value + 0.0/4.0 * (max_value - min_value);
+        v1 = min_value + 1.0/4.0 * (max_value - min_value);
+        v2 = min_value + 2.0/4.0 * (max_value - min_value);
+        v3 = min_value + 3.0/4.0 * (max_value - min_value);
+        v4 = min_value + 4.0/4.0 * (max_value - min_value);
+
+        surface_mesh::Color col(1.0f, 1.0f, 1.0f);
+
+        if (value < v0) {
+            col = surface_mesh::Color(0, 0, 1);
+        } else if (value > v4) {
+            col = surface_mesh::Color(1, 0, 0);
+        } else if (value <= v2) {
+            if (value <= v1) { // [v0, v1]
+                Scalar u =  (value - v0) / (v1 - v0);
+                col = surface_mesh::Color(0, u, 1);
+            } else { // ]v1, v2]
+                Scalar u = (value - v1) / (v2 - v1);
+                col = surface_mesh::Color(0, 1, 1-u);
+            }
+        } else {
+            if (value <= v3) { // ]v2, v3]
+                Scalar u = (value - v2) / (v3 - v2);
+                col = surface_mesh::Color(u, 1, 0);
+            } else { // ]v3, v4]
+                Scalar u = (value - v3) / (v4 - v3);
+                col = surface_mesh::Color(1, 1-u, 0);
+            }
+        }
+        return col;
+    }
+
 
 
 private:
@@ -1006,6 +1238,8 @@ private:
 
     // Boolean for the viewer
     bool wireframe = false;
+    /** NEW! Temperature boolean**/
+    bool temperature = false;
 
     // Grab variables
     bool m_isGrabbing = false;
@@ -1040,6 +1274,9 @@ private:
     int n_faces = 0;
     int n_edges = 0;
 
+    Scalar c_min_value;
+    Scalar c_max_value;
+
 	// Temporary storage for updated vertex positions or normals that have to be uploaded to the shader
 	// in the next drawContents() call.
 	// Can be set using updateShaderVertices() / updateShaderNormals();
@@ -1047,13 +1284,22 @@ private:
     MatrixXf m_updated_shader_normals;
     MatrixXf m_updated_vertex_selections;
 
+    /** **/
+    MatrixXf m_updated_vertex_sources;
+
     Eigen::Matrix<int, 1, -1> m_current_vertex_status;
 
-	// Flags that will be set to true when new vertex positions or normals have been povided via updateShaderVertices
+    /** NEW! Vertex colors for temperature! **/
+    Eigen::MatrixXf m_color_temperature_;
+
+    // Flags that will be set to true when new vertex positions or normals have been povided via updateShaderVertices
 	// which need to be re-uploaded at the beginning of the next drawContents() call
 	bool m_reupload_vertices = false;
     bool m_reupload_normals = false;
     bool m_reupload_vertex_selections = false;
+
+    /** NEW: Color boolean for reupload purposes **/
+    bool m_reupload_vertex_colors = false;
 
 	// Callback function to be called before each draw
 	bool (*m_pre_draw_callback)(Viewer*) = nullptr;
