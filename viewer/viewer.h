@@ -456,7 +456,7 @@ public:
 
         /** NEW: Box for temperature change **/
         Label* iterations_label = new Label(window, "Set Temperature: ");
-        FloatBox<int>* iterations_box = new FloatBox<int>(window);
+        FloatBox<float>* iterations_box = new FloatBox<float>(window);
         iterations_box->setEditable(true);
         iterations_box->setCallback([this](float temperature) {
             setSelectedVerticesTemperature(temperature);
