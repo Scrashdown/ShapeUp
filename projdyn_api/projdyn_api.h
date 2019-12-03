@@ -110,7 +110,7 @@ public:
             this->diffusion_type = UNILAPLACE;
             diff_activated = !diff_activated;
             cout << "Diffusion Activated: " << diff_activated << endl;
-            popupBtnDiff->setPushed(diff_activated);
+            popupBtnDiff->setPushed(false);
             c->setPushed(diff_activated);
         });
 
