@@ -305,6 +305,12 @@ public:
         // Simulate one time step
         m_simulator.step(m_numIterations);
 
+        /** NEW: update elasticity constraints based on temperature **/
+        // 1. Update temperature edge spring constraints
+        updateEdgeTemperatureElasticityConstraints();
+        // 2. Recompute LHS, RHS and update solver
+        m_simulator.recomputeConstraintsPrecomputations();
+
         return uploadPositions(forcedUpload);
     }
 
@@ -404,6 +410,40 @@ public:
         }
 
         return true;
+    }
+
+    // Update elasticity constraints based on temperature
+    void updateEdgeTemperatureElasticityConstraints() {
+        Surface_mesh* mesh = m_viewer->getMesh();
+        const ProjDyn::Positions& sim_verts = m_simulator.getInitialPositions();
+        Surface_mesh::Vertex_property<Scalar> v_temperature = mesh->vertex_property<Scalar>("v:temperature", 0.0);
+
+        // Find group of temperature based constraints, return false if it doesn't exist
+        for (const auto cg : m_simulator.getConstraintGroups()) {
+            if (cg->name == "Edge Temperature Elasticity") {
+                // Recompute weight of each constraint of the group and update
+                for (const auto c : cg->constraints) {
+                    const std::vector<Index>& vIndices = c->getIndices();
+                    const Scalar edgeLen = (sim_verts.row(vIndices[0]) - sim_verts.row(vIndices[1])).norm();
+                    // Hack for finding vertices given their idx
+                    auto vcts = mesh->vertices().begin();
+                    for (int j = 0; j < vIndices[0]; ++j) vcts.operator++();
+                    const auto v0 = *vcts;
+                    vcts = mesh->vertices().begin();
+                    for (int j = 0; j < vIndices[1]; ++j) vcts.operator++();
+                    const auto v1 = *vcts;
+
+                    const Scalar t0 = v_temperature[v0];
+                    const Scalar t1 = v_temperature[v1];
+                    const Scalar newWeight = edgeLen / (1.0 + 0.5 * (t0 + t1));
+                    c->setWeight(newWeight);
+                }
+
+                return;
+            }
+        }
+
+        std::cout << "Warning: no temperature elasticity constraint group found." << std::endl;
     }
 
     // Set external forces to point into downwards y direction with a certain magnitude

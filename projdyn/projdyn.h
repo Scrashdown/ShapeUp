@@ -86,31 +86,8 @@ namespace ProjDyn {
                 return false;
             }
 
-            // Collect entries of constraint matrix
-            std::vector<Triplet> con_triplets, con_triplets_t;
-            Index row_ind = 0, row_ind2 = 0;;
-            for (auto c : m_constraints) {
-                // The following function adds the row sqrt(w_i) A_i S_i
-                // (using the notation of the paper) to the matrix
-                c->addConstraint(con_triplets, row_ind2, true, false);
-
-                // The following function adds the row w_i S_i^T A_i^T
-                // (using the notation of the paper) to the matrix
-                c->addConstraint(con_triplets_t, row_ind, false, true);
-            }
-
-            // Construct the "laplacian" matrix from the triplets,
-            // i.e. the matrix Sum_i w_i S_i^T A_i^T A_i S_i, which
-            // appears on the left hand side of the system of the global step
-            SparseMatrixRM temp1(row_ind, m_num_verts);
-            temp1.setFromTriplets(con_triplets.begin(), con_triplets.end());
-            SparseMatrix temp2 = temp1.transpose();
-            m_laplacian = temp2 * temp1;
-
-            // Also construct the matrix Sum_i w_i S_i^T A_i^T 
-            // which appears on the right hand side of the global step
-            m_constraint_mat_t.resize(m_num_verts, row_ind);
-            m_constraint_mat_t.setFromTriplets(con_triplets_t.begin(), con_triplets_t.end());
+            // Construct Laplacian and constraint matrix
+            reconstructLaplacianAndConstraintMatrix();
 
             // Initialize internal quantities for simulation
             m_momentum.resize(m_num_verts, 3);
@@ -133,6 +110,13 @@ namespace ProjDyn {
             // Compute and factorize the lhs matrix
             return recomputeLHS();
         }
+
+		/** NEW: recomputes LHS and part of RHS that is precomputable. We need to do this
+		 * if constraints are changed in some way but we don't want to reset momentum, velocities, etc. **/
+		bool recomputeConstraintsPrecomputations() {
+			reconstructLaplacianAndConstraintMatrix();
+			return recomputeLHS();
+		}
 
         // Performs a step by applying the specified amount of local global iterations.
         // The system needs to be initialized and the lhs matrix up-to-date.
@@ -496,6 +480,35 @@ namespace ProjDyn {
 			for (int i = 0; i < m_num_verts; i++) {
 				m_mass_matrix.coeffRef(i, i) = m_vertex_masses(i);
 			}
+		}
+
+		/** NEW: reconstruct laplacian and constraint matrix **/
+		void reconstructLaplacianAndConstraintMatrix() {
+			// Collect entries of constraint matrix
+            std::vector<Triplet> con_triplets, con_triplets_t;
+            Index row_ind = 0, row_ind2 = 0;;
+            for (auto c : m_constraints) {
+                // The following function adds the row sqrt(w_i) A_i S_i
+                // (using the notation of the paper) to the matrix
+                c->addConstraint(con_triplets, row_ind2, true, false);
+
+                // The following function adds the row w_i S_i^T A_i^T
+                // (using the notation of the paper) to the matrix
+                c->addConstraint(con_triplets_t, row_ind, false, true);
+            }
+
+			// Construct the "laplacian" matrix from the triplets,
+            // i.e. the matrix Sum_i w_i S_i^T A_i^T A_i S_i, which
+            // appears on the left hand side of the system of the global step
+            SparseMatrixRM temp1(row_ind, m_num_verts);
+            temp1.setFromTriplets(con_triplets.begin(), con_triplets.end());
+            SparseMatrix temp2 = temp1.transpose();
+            m_laplacian = temp2 * temp1;
+
+			// Also construct the matrix Sum_i w_i S_i^T A_i^T 
+            // which appears on the right hand side of the global step
+            m_constraint_mat_t.resize(m_num_verts, row_ind);
+            m_constraint_mat_t.setFromTriplets(con_triplets_t.begin(), con_triplets_t.end());
 		}
 	};
 
