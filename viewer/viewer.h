@@ -104,6 +104,12 @@ public:
         n_edges = mesh.n_edges();
         cout << "# of edges : " << n_edges << endl;
 
+        /** NEW: build vertex lookup table **/
+        m_vertex_lookup_table.resize(mesh.n_vertices());
+        for (const auto v : mesh.vertices()) {
+            m_vertex_lookup_table[v.idx()] = v;
+        }
+
         mesh_center = computeCenter(&mesh);
         float dist_max = 0.0f;
         for (auto v: mesh.vertices()) {
@@ -179,14 +185,8 @@ public:
                                                           surface_mesh::Color(1.0f, 1.0f, 1.0f));
 
         /** The loop is only made on the selected vertices*/
-        auto vtcs = mesh.vertices().begin();
         for(auto id : m_selectedVertices){
-            vtcs = mesh.vertices().begin(); // it is necessary to reset to begin at every iteration for the next method to work
-            /** Finding back the edge corresponding to the selected edge can be done through this iterator "hack" (note it is invariant to ordering of selected vertices)*/
-            for(int j = 0; j < id ; ++j){
-                vtcs.operator++();
-            }
-            auto v = *vtcs;
+            const auto v = m_vertex_lookup_table[id];
 
             /** Update the relevant temperature quantities at last */
             v_temperature[v] = temperature;
@@ -207,12 +207,8 @@ public:
         Surface_mesh::Vertex_property<bool> v_is_source = mesh.vertex_property<bool>("v:is_source", false);
         auto vtcs = mesh.vertices().begin();
         for(auto id: m_selectedVertices){
-            // same hack as setSelectedVerticesTemperature
-            vtcs = mesh.vertices().begin();
-            for(int j = 0; j < id ; ++j){
-                vtcs.operator++();
-            }
-            auto v = *vtcs;
+            const auto v = m_vertex_lookup_table[id];
+
             /** Flip the source boolean*/
             v_is_source[v] =! v_is_source[v];
             /** Updates the display: a source is displayed in red, otherwise it is not displayed*/
@@ -966,6 +962,8 @@ public:
 		return &mesh;
 	}
 
+    const std::vector<Surface_mesh::Vertex>& getVertexLookupTable() const { return m_vertex_lookup_table; }
+
     void clearSelection() {
         m_selectedVertices.clear();
         updateVertexStatusVisualization();
@@ -1232,6 +1230,9 @@ private:
 
     Point mesh_center = Point(0.0f, 0.0f, 0.0f);
     Surface_mesh mesh;
+
+    /** NEW: tightly packed array for finding a vertex given its index **/
+    std::vector<Surface_mesh::Vertex> m_vertex_lookup_table;
 
     enum COLOR_MODE : int { NORMAL = 0, VALENCE = 1, CURVATURE = 2 };
     enum CURVATURE_TYPE : int { UNIMEAN = 2, LAPLACEBELTRAMI = 3, GAUSS = 4 };

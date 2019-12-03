@@ -417,6 +417,7 @@ public:
         Surface_mesh* mesh = m_viewer->getMesh();
         const ProjDyn::Positions& sim_verts = m_simulator.getInitialPositions();
         Surface_mesh::Vertex_property<Scalar> v_temperature = mesh->vertex_property<Scalar>("v:temperature", 0.0);
+        const auto v_lookup_table = m_viewer->getVertexLookupTable();
 
         // Find group of temperature based constraints, return false if it doesn't exist
         for (const auto cg : m_simulator.getConstraintGroups()) {
@@ -425,13 +426,8 @@ public:
                 for (const auto c : cg->constraints) {
                     const std::vector<Index>& vIndices = c->getIndices();
                     const Scalar edgeLen = (sim_verts.row(vIndices[0]) - sim_verts.row(vIndices[1])).norm();
-                    // Hack for finding vertices given their idx
-                    auto vcts = mesh->vertices().begin();
-                    for (int j = 0; j < vIndices[0]; ++j) vcts.operator++();
-                    const auto v0 = *vcts;
-                    vcts = mesh->vertices().begin();
-                    for (int j = 0; j < vIndices[1]; ++j) vcts.operator++();
-                    const auto v1 = *vcts;
+                    const auto v0 = v_lookup_table[vIndices[0]];
+                    const auto v1 = v_lookup_table[vIndices[1]];
 
                     const Scalar t0 = v_temperature[v0];
                     const Scalar t1 = v_temperature[v1];
