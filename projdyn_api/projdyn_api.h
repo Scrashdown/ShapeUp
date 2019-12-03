@@ -16,6 +16,9 @@
 #include "viewer.h"
 #include "projdyn_widgets.h"
 
+#include <surface_mesh/types.h>
+#include <surface_mesh/Surface_mesh.h>
+
 class ProjDynAPI {
 public:
     // Some default values
@@ -23,6 +26,13 @@ public:
     const int  NUM_ITS_INITIAL = 10;
     const int  FPS = 60;
     const bool DYNAMIC_MODE = true;
+
+    /** NEW values for diffusion : button toggling */
+    bool diff_activated = false;
+    enum TEMP_DIFFUSION_TYPE : int { UNILAPLACE = 2};
+    TEMP_DIFFUSION_TYPE diffusion_type = UNILAPLACE;
+    ///////////////////////////////////
+
 
     ProjDynAPI(Viewer* viewer) {
         m_numIterations = NUM_ITS_INITIAL;
@@ -86,6 +96,22 @@ public:
         Button* addtets_b = new Button(pd_win, "Tetrahedralize");
         addtets_b->setCallback([this]() {
             setMesh(true);
+        });
+
+
+        /** NEW! Add UI for temperature diffusion !*/
+        PopupButton* popupBtnDiff = new PopupButton(pd_win, "Temp. Diffuse", ENTYPO_ICON_LINK);
+        Popup* popupDiff = popupBtnDiff->popup();
+        popupDiff->setLayout(new GroupLayout());
+
+        Button* c = new Button(popupDiff, "Uniform");
+        c->setFlags(Button::RadioButton);
+        c->setCallback([this, popupBtnDiff, c]() {
+            this->diffusion_type = UNILAPLACE;
+            diff_activated = !diff_activated;
+            cout << "Diffusion Activated: " << diff_activated << endl;
+            popupBtnDiff->setPushed(diff_activated);
+            c->setPushed(diff_activated);
         });
 
         PopupButton* popupBtn = new PopupButton(pd_win, "Add constraints", ENTYPO_ICON_LINK);
@@ -292,6 +318,20 @@ public:
 
         // Simulate one time step
         m_simulator.step(m_numIterations);
+
+        /** NEW! update temperature values if diffusion activated */
+        cout << "Attempting diffuse" << endl;
+        if(diff_activated) {
+            cout << "Diffusing temperatures ";
+            switch(diffusion_type) {
+                case UNILAPLACE:
+                    cout << "using uniform laplacian" << endl;
+                    uniform_diffuse(1);
+                    break;
+                default:
+                    break;
+            }
+        }
 
         return uploadPositions(forcedUpload);
     }
@@ -649,4 +689,54 @@ private:
         // Add constraints
         addConstraints(std::make_shared<ProjDyn::ConstraintGroup>("Edge Springs", spring_constraints, weight));
     }
+
+    /** NEW first try to uniform diffuse using laplacian formula */
+    //todo create class to harbor all processing
+    void uniform_diffuse(const unsigned int iterations) {
+        auto mesh_ = m_viewer->getMesh();
+        Surface_mesh::Vertex_around_vertex_circulator vv_c, vv_end;
+        float laplacian;
+        //todo make decay dynamic
+        float decay = 0.05f;
+        Surface_mesh::Vertex_property<bool> v_is_source = mesh_->vertex_property<bool>("v:is_source", false);
+        Surface_mesh::Vertex_property<Scalar> v_temp = mesh_->vertex_property<Scalar>("v:temperature",0.0);
+        std::vector<Scalar> bef_data(mesh_->n_vertices());
+        for(auto v: mesh_->vertices()) {
+            bef_data[v.idx()] = v_temp[v];
+        }
+
+        Surface_mesh::Vertex_property<surface_mesh::Color> v_color_temp = mesh_->vertex_property<surface_mesh::Color>("v:color_temperature",
+                                                                                                                    surface_mesh::Color(1.0f, 1.0f, 1.0f));
+
+        for (unsigned int iter=0; iter<iterations; ++iter) {
+            // For each non-boundary vertex, update its temperature according to the uniform Laplacian operator
+            for( auto v: mesh_->vertices()){
+
+                if(mesh_->is_boundary(v)) {
+                    continue;
+                }
+
+                float t0 = bef_data[v.idx()];
+                vv_c = mesh_->vertices(v);
+                vv_end = vv_c;
+                float n = 1;
+                float sum_temp(t0);
+                do {
+                    float ti = bef_data[(*vv_c).idx()];
+                    sum_temp += ti;
+                    n += 1;
+                } while (++vv_c != vv_end);
+                laplacian = sum_temp / n;
+                //v_temp[v] = t0 + decay * laplacian;
+                if(!v_is_source[v]) {
+                    v_temp[v] = (1 - decay) * laplacian;
+                }
+                cout << v_temp[v] << " " ;
+            }
+
+        }
+        m_viewer->setTemperatureColor();
+
+    }
+
 };

@@ -166,7 +166,26 @@ public:
         return m_current_vertex_status;
     }
 
-    /** NEW: Updates temperature of selected vertices with provided temperature**/
+    /**NEW! Update color matrix for temperature visualization */
+    void setTemperatureColor() {
+        Surface_mesh::Vertex_property<Scalar> v_temperature =
+                mesh.vertex_property<Scalar>("v:temperature", 0.0);
+        Surface_mesh::Vertex_property<surface_mesh::Color> v_color_temperature =
+                mesh.vertex_property<surface_mesh::Color>("v:color_temperature",
+                                                          surface_mesh::Color(1.0f, 1.0f, 1.0f));
+        for (auto v : mesh.vertices()) {
+
+            set_color(v, value_to_color(v_temperature[v], c_min_value, c_max_value), v_color_temperature);
+            m_color_temperature_.col(v.idx()) << v_color_temperature[v].x,
+                    v_color_temperature[v].y,
+                    v_color_temperature[v].z;
+        }
+
+        m_reupload_vertex_colors = true;
+
+    }
+
+        /** NEW: Updates temperature of selected vertices with provided temperature**/
     /**
      * Sets the temperature of the selected vertices to the float passed as argument
      * @param temperature Float value with which to update temperature of selected vertices
@@ -1240,6 +1259,7 @@ private:
     bool wireframe = false;
     /** NEW! Temperature boolean**/
     bool temperature = false;
+    /** End NEW */
 
     // Grab variables
     bool m_isGrabbing = false;
