@@ -226,7 +226,10 @@ public:
 
         Button* b = new Button(m_constraint_window, "Update");
         b->setCallback([this]() {
+            bool wasRunning = m_simActive;
+            stop();
             update();
+            if (wasRunning) start();
         });
 
         m_viewer->performLayout();
