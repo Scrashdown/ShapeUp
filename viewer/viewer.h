@@ -243,6 +243,15 @@ public:
         }
     }
 
+    void clearSources() {
+        Surface_mesh::Vertex_property<bool> v_is_source = mesh.vertex_property<bool>("v:is_source", false);
+
+        for(auto v: mesh.vertices()){
+            v_is_source[v] = false;
+        }
+        m_reupload_vertex_selections = true;
+    }
+
     void updateVertexStatusVisualization() {
         m_updated_vertex_selections.setZero(3, n_vertices);
         for (Index i = 0; i < std::max(m_updated_vertex_selections.cols(), m_updated_vertex_selections.cols()); i++) {
@@ -482,6 +491,14 @@ public:
         b->setFlags(Button::NormalButton);
         b->setCallback([this](void){
             toggleTemperatureSourceSelectedVertices();
+        });
+
+        /** NEW! Button for clearing all sources at once **/
+        b = new Button(window, "Clear sources");
+        b->setFlags(Button::NormalButton);
+        b->setCallback([this](void){
+            clearSelection();
+            clearSources();
         });
 
         performLayout();

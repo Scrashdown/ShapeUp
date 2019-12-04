@@ -802,8 +802,101 @@ private:
         addConstraints(std::make_shared<ProjDyn::ConstraintGroup>("Edge Springs", spring_constraints, weight));
     }
 
-    /** NEW first try to uniform diffuse using laplacian formula */
+    /** Start of Mesh Processing functions
     //todo create class to harbor all processing
+
+     *  Weight calculations are functions taken from
+     *  //=============================================================================
+        //
+        //   Code framework for the lecture
+        //
+        //   "Digital 3D Geometry Processing"
+        //
+        //   Gaspard Zoss, Alexandru Ichim
+        //
+        //   Copyright (C) 2016 by Computer Graphics and Geometry Laboratory,
+        //         EPF Lausanne
+        //
+        //-----------------------------------------------------------------------------
+
+     *  */
+    void calc_weights() {
+        calc_edges_weights();
+        calc_vertices_weights();
+    }
+
+    void calc_edges_weights() {
+        auto mesh_ = m_viewer->getMesh();
+        auto e_weight = mesh_->edge_property<Scalar>("e:weight", 0.0f);
+        auto points = mesh_->vertex_property<Point>("v:point");
+
+        Surface_mesh::Halfedge h0, h1, h2;
+        Point p0, p1, p2, d0, d1;
+
+        for (auto e: mesh_->edges())
+        {
+            e_weight[e] = 0.0;
+
+            h0 = mesh_->halfedge(e, 0);
+            p0 = points[mesh_->to_vertex(h0)];
+
+            h1 = mesh_->halfedge(e, 1);
+            p1 = points[mesh_->to_vertex(h1)];
+
+            if (!mesh_->is_boundary(h0))
+            {
+                h2 = mesh_->next_halfedge(h0);
+                p2 = points[mesh_->to_vertex(h2)];
+                d0 = p0 - p2;
+                d1 = p1 - p2;
+                e_weight[e] += dot(d0,d1) / norm(cross(d0,d1));
+            }
+
+            if (!mesh_->is_boundary(h1))
+            {
+                h2 = mesh_->next_halfedge(h1);
+                p2 = points[mesh_->to_vertex(h2)];
+                d0 = p0 - p2;
+                d1 = p1 - p2;
+                e_weight[e] += dot(d0,d1) / norm(cross(d0,d1));
+            }
+        }
+    }
+
+    void calc_vertices_weights() {
+        Surface_mesh::Face_around_vertex_circulator vf_c, vf_end;
+        Surface_mesh::Vertex_around_face_circulator fv_c;
+        Scalar area;
+        auto mesh_ = m_viewer->getMesh();
+        auto v_weight = mesh_->vertex_property<Scalar>("v:weight", 0.0f);
+
+        for (auto v: mesh_->vertices()) {
+            area = 0.0;
+            vf_c = mesh_->faces(v);
+
+            if(!vf_c) {
+                continue;
+            }
+
+            vf_end = vf_c;
+
+            do {
+                fv_c = mesh_->vertices(*vf_c);
+
+                const Point& P = mesh_->position(*fv_c);  ++fv_c;
+                const Point& Q = mesh_->position(*fv_c);  ++fv_c;
+                const Point& R = mesh_->position(*fv_c);
+
+                area += norm(cross(Q-P, R-P)) * 0.5f * 0.3333f;
+
+            } while(++vf_c != vf_end);
+
+            v_weight[v] = 0.5 / area;
+        }
+    }
+
+
+    /** NEW Uniform diffuse using laplacian formula */
     void uniform_diffuse() {
 
         cout << "Uniform diffusion with decay value : " << decay << " for " << diffusion_iterations << " iterations" <<  endl;
@@ -822,9 +915,9 @@ private:
             for (auto v: mesh_->vertices()) {
                 bef_data[v.idx()] = v_temp[v];
             }
-            // For each non-boundary vertex, update its temperature according to the uniform Laplacian operator
             for (auto v: mesh_->vertices()){
-                if(mesh_->is_boundary(v)) {
+                // do not modify vertex temperature if the vertex is a source of temperature
+                if(v_is_source[v]) {
                     continue;
                 }
 
@@ -839,10 +932,8 @@ private:
                     n += 1;
                 } while (++vv_c != vv_end);
                 laplacian = sum_temp / n;
-                //v_temp[v] = t0 + decay * laplacian;
-                if(!v_is_source[v]) {
-                    v_temp[v] = (1 - decay) * laplacian;
-                }
+
+                v_temp[v] = (1 - decay) * laplacian;
             }
 
         }
