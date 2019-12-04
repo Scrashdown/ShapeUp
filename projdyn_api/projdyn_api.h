@@ -205,7 +205,8 @@ public:
         }
 
         // For each constraint group add controls
-        for (const auto& g : m_simulator.getConstraintGroups()) {
+        for (const auto& elem : m_simulator.getConstraintGroups()) {
+            const auto g = elem.second;
             new Label(m_constraint_window, g->name, "sans-bold");
             Widget* panel = new Widget(m_constraint_window);
             panel->setLayout(new BoxLayout(nanogui::Orientation::Horizontal, nanogui::Alignment::Middle, 0, 10));
@@ -418,25 +419,26 @@ public:
         const ProjDyn::Positions& sim_verts = m_simulator.getInitialPositions();
         Surface_mesh::Vertex_property<Scalar> v_temperature = mesh->vertex_property<Scalar>("v:temperature", 0.0);
         const auto v_lookup_table = m_viewer->getVertexLookupTable();
+        const auto groups = m_simulator.getConstraintGroups();
 
         // Find group of temperature based constraints, return false if it doesn't exist
-        for (const auto cg : m_simulator.getConstraintGroups()) {
-            if (cg->name == "Edge Temperature Elasticity") {
-                // Recompute weight of each constraint of the group and update
-                for (const auto c : cg->constraints) {
-                    const std::vector<Index>& vIndices = c->getIndices();
-                    const Scalar edgeLen = (sim_verts.row(vIndices[0]) - sim_verts.row(vIndices[1])).norm();
-                    const auto v0 = v_lookup_table[vIndices[0]];
-                    const auto v1 = v_lookup_table[vIndices[1]];
+        const auto elem = groups.find("Edge Temperature Elasticity");
+        if (elem != groups.end()) {
+            auto cg = elem->second;
+            // Recompute weight of each constraint of the group and update
+            for (const auto c : cg->constraints) {
+                const std::vector<Index>& vIndices = c->getIndices();
+                const Scalar edgeLen = (sim_verts.row(vIndices[0]) - sim_verts.row(vIndices[1])).norm();
+                const auto v0 = v_lookup_table[vIndices[0]];
+                const auto v1 = v_lookup_table[vIndices[1]];
 
-                    const Scalar t0 = v_temperature[v0];
-                    const Scalar t1 = v_temperature[v1];
-                    const Scalar newWeight = edgeLen / (1.0 + 0.5 * (t0 + t1));
-                    c->setWeight(newWeight);
-                }
-
-                return;
+                const Scalar t0 = v_temperature[v0];
+                const Scalar t1 = v_temperature[v1];
+                const Scalar newWeight = edgeLen / (1.0 + 0.5 * (t0 + t1));
+                c->setWeight(newWeight);
             }
+
+            return;
         }
 
         std::cout << "Warning: no temperature elasticity constraint group found." << std::endl;

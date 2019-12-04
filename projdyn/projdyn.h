@@ -73,7 +73,8 @@ namespace ProjDyn {
 
             // Get list of all current constraints from constraint group
             m_constraints.clear();
-            for (auto cg : m_constraintGroups) {
+            for (auto elem : m_constraintGroups) {
+				auto cg = elem.second;
                 for (auto c : cg->constraints) {
                     // Update weight multiplier of constraint and add to list of all constraints
                     c->setWeightMultiplier(cg->weight);
@@ -247,22 +248,21 @@ namespace ProjDyn {
 		void addConstraints(const std::vector<ConstraintPtr>& newCons) {
             ConstraintGroupPtr newGroup = std::make_shared<ConstraintGroup>("Group " + m_globalIDCounter, newCons, 1.);
             m_globalIDCounter++;
-            m_constraintGroups.push_back(newGroup);
+            m_constraintGroups.insert(std::pair<std::string, ConstraintGroupPtr>(newGroup->name, newGroup));
 			m_system_init = false;
 		}
 
         void addConstraints(ConstraintGroupPtr newCons) {
-            m_constraintGroups.push_back(newCons);
+            m_constraintGroups.insert(std::pair<std::string, ConstraintGroupPtr>(newCons->name, newCons));
             m_system_init = false;
         }
 
         void removeConstraints(ConstraintGroupPtr constraints) {
-            m_constraintGroups.erase(std::remove(m_constraintGroups.begin(), m_constraintGroups.end(), constraints), m_constraintGroups.end());
+            m_constraintGroups.erase(constraints->name);
         }
 
         void removeConstraints(std::string name) {
-            auto remove_it = std::remove_if(m_constraintGroups.begin(), m_constraintGroups.end(), [name](const ConstraintGroupPtr& v) { return (v->name == name); });
-            m_constraintGroups.erase(remove_it, m_constraintGroups.end());
+            m_constraintGroups.erase(name);
         }
 
         // Adds single constraint to the simulation.
@@ -270,7 +270,7 @@ namespace ProjDyn {
         void addConstraint(const ConstraintPtr& con) {
             ConstraintGroupPtr newGroup = std::make_shared<ConstraintGroup>("Group " + m_globalIDCounter, std::vector<ConstraintPtr>({ con }), 1.);
             m_globalIDCounter++;
-            m_constraintGroups.push_back(newGroup);
+            m_constraintGroups.insert(std::pair<std::string, ConstraintGroupPtr>(newGroup->name, newGroup));
             m_system_init = false;
         }
 
@@ -280,7 +280,7 @@ namespace ProjDyn {
 			m_system_init = false;
 		}
 
-		const std::vector<ConstraintGroupPtr>& getConstraintGroups() {
+		const std::unordered_map<std::string, ConstraintGroupPtr>& getConstraintGroups() {
 			return m_constraintGroups;
 		}
 
@@ -392,8 +392,8 @@ namespace ProjDyn {
 		// Stiffness factor, applied to *all* constraints
 		Scalar m_stiffness_factor = 1.;
 
-		// List of constraint groups
-		std::vector<ConstraintGroupPtr> m_constraintGroups;
+		// Map constraint group names to their constraint
+		std::unordered_map<std::string, ConstraintGroupPtr> m_constraintGroups;
 
         // List of actual constraints, filled from constrain groups list when calling initializeSystem
         std::vector<ConstraintPtr> m_constraints;
