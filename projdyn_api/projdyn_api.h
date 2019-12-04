@@ -16,6 +16,9 @@
 #include "viewer.h"
 #include "projdyn_widgets.h"
 
+#include <surface_mesh/types.h>
+#include <surface_mesh/Surface_mesh.h>
+
 class ProjDynAPI {
 public:
     // Some default values
@@ -23,6 +26,15 @@ public:
     const int  NUM_ITS_INITIAL = 10;
     const int  FPS = 60;
     const bool DYNAMIC_MODE = true;
+
+    /** NEW values for diffusion : button toggling */
+    bool diff_activated = false;
+    enum TEMP_DIFFUSION_TYPE : int { UNILAPLACE = 2};
+    TEMP_DIFFUSION_TYPE diffusion_type = UNILAPLACE;
+    float decay = 0.0f;
+    int diffusion_iterations = 1;
+    ///////////////////////////////////
+
 
     ProjDynAPI(Viewer* viewer) {
         m_numIterations = NUM_ITS_INITIAL;
@@ -87,6 +99,45 @@ public:
         addtets_b->setCallback([this]() {
             setMesh(true);
         });
+
+
+        /** NEW! Add UI for temperature diffusion !*/
+        PopupButton* popupBtnDiff = new PopupButton(pd_win, "Temp. Diffuse", ENTYPO_ICON_LINK);
+        Popup* popupDiff = popupBtnDiff->popup();
+        popupDiff->setLayout(new GroupLayout());
+
+        /** NEW!  change decay **/
+        Label* decay_label = new Label(popupDiff, "Decay: ");
+        FloatBox<float>* decay_box = new FloatBox<float>(popupDiff);
+        decay_box->setEditable(true);
+        decay_box->setDefaultValue("0.0");
+        decay_box->setMinValue(0.0f);
+        decay_box->setMaxValue(1.0f);
+        decay_box->setCallback([this](float decay) {
+            // Clamp decay between 0.0 and 1.0
+            this->decay = max(0.0f, min(1.0f, decay));
+        });
+
+        /** NEW!  change number of iterations */
+        Label* diff_iterations_label = new Label(popupDiff, "Iterations: ");
+        IntBox<int>* diff_iterations_box = new IntBox<int>(popupDiff);
+        diff_iterations_box->setEditable(true);
+        diff_iterations_box->setDefaultValue("1");
+        diff_iterations_box->setMinValue(1);
+        diff_iterations_box->setCallback([this](int iterations) {
+            this->diffusion_iterations = iterations < 1 ? 1 : iterations;
+        });
+
+        Button* c = new Button(popupDiff, "Uniform");
+        c->setFlags(Button::RadioButton);
+        c->setCallback([this, popupBtnDiff, c]() {
+            this->diffusion_type = UNILAPLACE;
+            diff_activated = !diff_activated;
+            cout << "Diffusion Activated: " << diff_activated << endl;
+            popupBtnDiff->setPushed(false);
+            c->setPushed(diff_activated);
+        });
+        /////////////////////////////////////////////////////////////
 
         PopupButton* popupBtn = new PopupButton(pd_win, "Add constraints", ENTYPO_ICON_LINK);
         Popup* popup = popupBtn->popup();
@@ -306,14 +357,27 @@ public:
                 return false;
         }
 
-        // Simulate one time step
-        m_simulator.step(m_numIterations);
-
         /** NEW: update elasticity constraints based on temperature **/
         // 1. Update temperature edge spring constraints
         updateEdgeTemperatureElasticityConstraints();
         // 2. Recompute LHS, RHS and update solver
         m_simulator.recomputeConstraintsPrecomputations();
+        /** NEW! update temperature values if diffusion activated */
+        cout << "Attempting diffuse" << endl;
+        if(diff_activated) {
+            cout << "Diffusing temperatures ";
+            switch(diffusion_type) {
+                case UNILAPLACE:
+                    cout << "using uniform laplacian" << endl;
+                    uniform_diffuse();
+                    break;
+                default:
+                    break;
+            }
+        }
+
+        // Simulate one time step
+        m_simulator.step(m_numIterations);
 
         return uploadPositions(forcedUpload);
     }
@@ -737,4 +801,53 @@ private:
         // Add constraints
         addConstraints(std::make_shared<ProjDyn::ConstraintGroup>("Edge Springs", spring_constraints, weight));
     }
+
+    /** NEW first try to uniform diffuse using laplacian formula */
+    //todo create class to harbor all processing
+    void uniform_diffuse() {
+
+        cout << "Uniform diffusion with decay value : " << decay << " for " << diffusion_iterations << " iterations" <<  endl;
+        auto mesh_ = m_viewer->getMesh();
+        Surface_mesh::Vertex_around_vertex_circulator vv_c, vv_end;
+        float laplacian;
+        Surface_mesh::Vertex_property<bool> v_is_source = mesh_->vertex_property<bool>("v:is_source", false);
+        Surface_mesh::Vertex_property<Scalar> v_temp = mesh_->vertex_property<Scalar>("v:temperature",0.0);
+        std::vector<Scalar> bef_data(mesh_->n_vertices());
+
+        Surface_mesh::Vertex_property<surface_mesh::Color> v_color_temp = mesh_->vertex_property<surface_mesh::Color>("v:color_temperature",
+                                                                                                                    surface_mesh::Color(1.0f, 1.0f, 1.0f));
+
+        for (unsigned int iter=0; iter<diffusion_iterations; ++iter) {
+            // Save old temperatures
+            for (auto v: mesh_->vertices()) {
+                bef_data[v.idx()] = v_temp[v];
+            }
+            // For each non-boundary vertex, update its temperature according to the uniform Laplacian operator
+            for (auto v: mesh_->vertices()){
+                if(mesh_->is_boundary(v)) {
+                    continue;
+                }
+
+                float t0 = bef_data[v.idx()];
+                vv_c = mesh_->vertices(v);
+                vv_end = vv_c;
+                float n = 1;
+                float sum_temp(t0);
+                do {
+                    float ti = bef_data[(*vv_c).idx()];
+                    sum_temp += ti;
+                    n += 1;
+                } while (++vv_c != vv_end);
+                laplacian = sum_temp / n;
+                //v_temp[v] = t0 + decay * laplacian;
+                if(!v_is_source[v]) {
+                    v_temp[v] = (1 - decay) * laplacian;
+                }
+            }
+
+        }
+        m_viewer->setTemperatureColor();
+
+    }
+
 };
