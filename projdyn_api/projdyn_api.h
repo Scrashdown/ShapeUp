@@ -31,6 +31,8 @@ public:
     bool diff_activated = false;
     enum TEMP_DIFFUSION_TYPE : int { UNILAPLACE = 2};
     TEMP_DIFFUSION_TYPE diffusion_type = UNILAPLACE;
+    float decay = 0.0f;
+    int diffusion_iterations = 1;
     ///////////////////////////////////
 
 
@@ -104,6 +106,22 @@ public:
         Popup* popupDiff = popupBtnDiff->popup();
         popupDiff->setLayout(new GroupLayout());
 
+        /** NEW!  change decay **/
+        Label* decay_label = new Label(popupDiff, "Decay: ");
+        FloatBox<float>* decay_box = new FloatBox<float>(popupDiff);
+        decay_box->setEditable(true);
+        decay_box->setCallback([this](float decay) {
+            this->decay = decay < 0 ? 0 : decay ;
+        });
+
+        /** NEW!  change number of iterations */
+        Label* diff_iterations_label = new Label(popupDiff, "Iterations: ");
+        FloatBox<float>* diff_iterations_box = new FloatBox<float>(popupDiff);
+        diff_iterations_box->setEditable(true);
+        diff_iterations_box->setCallback([this](float iterations) {
+            this->diffusion_iterations = iterations < 1 ? 1 : iterations;
+        });
+
         Button* c = new Button(popupDiff, "Uniform");
         c->setFlags(Button::RadioButton);
         c->setCallback([this, popupBtnDiff, c]() {
@@ -113,6 +131,7 @@ public:
             popupBtnDiff->setPushed(false);
             c->setPushed(diff_activated);
         });
+        /////////////////////////////////////////////////////////////
 
         PopupButton* popupBtn = new PopupButton(pd_win, "Add constraints", ENTYPO_ICON_LINK);
         Popup* popup = popupBtn->popup();
@@ -326,7 +345,7 @@ public:
             switch(diffusion_type) {
                 case UNILAPLACE:
                     cout << "using uniform laplacian" << endl;
-                    uniform_diffuse(1);
+                    uniform_diffuse();
                     break;
                 default:
                     break;
@@ -692,12 +711,12 @@ private:
 
     /** NEW first try to uniform diffuse using laplacian formula */
     //todo create class to harbor all processing
-    void uniform_diffuse(const unsigned int iterations) {
+    void uniform_diffuse() {
+
+        cout << "Uniform diffusion with decay value : " << decay << " for " << diffusion_iterations << " iterations" <<  endl;
         auto mesh_ = m_viewer->getMesh();
         Surface_mesh::Vertex_around_vertex_circulator vv_c, vv_end;
         float laplacian;
-        //todo make decay dynamic
-        float decay = 0.05f;
         Surface_mesh::Vertex_property<bool> v_is_source = mesh_->vertex_property<bool>("v:is_source", false);
         Surface_mesh::Vertex_property<Scalar> v_temp = mesh_->vertex_property<Scalar>("v:temperature",0.0);
         std::vector<Scalar> bef_data(mesh_->n_vertices());
@@ -708,7 +727,7 @@ private:
         Surface_mesh::Vertex_property<surface_mesh::Color> v_color_temp = mesh_->vertex_property<surface_mesh::Color>("v:color_temperature",
                                                                                                                     surface_mesh::Color(1.0f, 1.0f, 1.0f));
 
-        for (unsigned int iter=0; iter<iterations; ++iter) {
+        for (unsigned int iter=0; iter<diffusion_iterations; ++iter) {
             // For each non-boundary vertex, update its temperature according to the uniform Laplacian operator
             for( auto v: mesh_->vertices()){
 
@@ -731,7 +750,6 @@ private:
                 if(!v_is_source[v]) {
                     v_temp[v] = (1 - decay) * laplacian;
                 }
-                cout << v_temp[v] << " " ;
             }
 
         }
