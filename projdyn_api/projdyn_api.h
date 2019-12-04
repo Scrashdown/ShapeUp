@@ -29,7 +29,7 @@ public:
 
     /** NEW values for diffusion : button toggling */
     bool diff_activated = false;
-    enum TEMP_DIFFUSION_TYPE : int { UNILAPLACE = 2};
+    enum TEMP_DIFFUSION_TYPE : int { UNILAPLACE = 2, COTANLAPLACE = 3};
     TEMP_DIFFUSION_TYPE diffusion_type = UNILAPLACE;
     float decay = 0.0f;
     int diffusion_iterations = 1;
@@ -106,6 +106,37 @@ public:
         Popup* popupDiff = popupBtnDiff->popup();
         popupDiff->setLayout(new GroupLayout());
 
+        Button* no_diff = new Button(popupDiff, "None");
+        Button* uniform = new Button(popupDiff, "Uniform");
+        Button* cotan = new Button(popupDiff, "Cotan");
+
+        no_diff->setFlags(Button::RadioButton);
+        no_diff->setPushed(true);
+        uniform->setFlags(Button::RadioButton);
+        cotan->setFlags(Button::RadioButton);
+
+        uniform->setCallback([this, popupBtnDiff, uniform, cotan]() {
+            this->diffusion_type = UNILAPLACE;
+            diff_activated = uniform->pushed();
+            uniform->setPushed(diff_activated);
+            cout << "Diffusion Activated: Uniform" << endl;
+            popupBtnDiff->setPushed(false);
+        });
+
+        cotan->setCallback([this, popupBtnDiff, uniform, cotan]() {
+            this->diffusion_type = COTANLAPLACE;
+            diff_activated = cotan->pushed();
+            cout << "Diffusion Activated: Weighted Cotan" << endl;
+            popupBtnDiff->setPushed(false);
+        });
+
+
+        no_diff->setCallback([this, popupBtnDiff, uniform, cotan]() {
+            diff_activated = false;
+            cout << "Diffusion DeActivated " << endl;
+            popupBtnDiff->setPushed(false);
+        });
+
         /** NEW!  change decay **/
         Label* decay_label = new Label(popupDiff, "Decay: ");
         FloatBox<float>* decay_box = new FloatBox<float>(popupDiff);
@@ -128,15 +159,6 @@ public:
             this->diffusion_iterations = iterations < 1 ? 1 : iterations;
         });
 
-        Button* c = new Button(popupDiff, "Uniform");
-        c->setFlags(Button::RadioButton);
-        c->setCallback([this, popupBtnDiff, c]() {
-            this->diffusion_type = UNILAPLACE;
-            diff_activated = !diff_activated;
-            cout << "Diffusion Activated: " << diff_activated << endl;
-            popupBtnDiff->setPushed(false);
-            c->setPushed(diff_activated);
-        });
         /////////////////////////////////////////////////////////////
 
         PopupButton* popupBtn = new PopupButton(pd_win, "Add constraints", ENTYPO_ICON_LINK);
@@ -363,13 +385,16 @@ public:
         // 2. Recompute LHS, RHS and update solver
         m_simulator.recomputeConstraintsPrecomputations();
         /** NEW! update temperature values if diffusion activated */
-        cout << "Attempting diffuse" << endl;
         if(diff_activated) {
             cout << "Diffusing temperatures ";
             switch(diffusion_type) {
                 case UNILAPLACE:
                     cout << "using uniform laplacian" << endl;
                     uniform_diffuse();
+                    break;
+                case COTANLAPLACE:
+                    cout << "using cotan weighted laplacian" << endl;
+                    weighted_diffuse();
                     break;
                 default:
                     break;
@@ -805,7 +830,7 @@ private:
     /** Start of Mesh Processing functions
     //todo create class to harbor all processing
 
-     *  Weight calculations are functions taken from
+     *  Weight calculations are functions taken from:
      *  //=============================================================================
         //
         //   Code framework for the lecture
@@ -895,8 +920,60 @@ private:
         }
     }
 
+    /** NEW! Weighted diffuse using cotan weights and laplacian formula */
+    void weighted_diffuse() {
+        cout << "Weighted diffusion with decay value : " << decay << " for " << diffusion_iterations << " iterations" <<  endl;
 
-    /** NEW Uniform diffuse using laplacian formula */
+        auto mesh_ = m_viewer->getMesh();
+        Surface_mesh::Vertex_property<Scalar>  v_temperature =
+                mesh_->vertex_property<Scalar>("v:temperature", 0.0f);
+        Surface_mesh::Edge_property<Scalar> e_weight =
+                mesh_->edge_property<Scalar>("e:weight", 0.0f);
+        Surface_mesh::Vertex_property<Scalar>  v_weight =
+                mesh_->vertex_property<Scalar>("v:weight", 0.0f);
+        Surface_mesh::Vertex_property<bool> v_is_source = mesh_->vertex_property<bool>("v:is_source", false);
+        std::vector<Scalar> bef_data(mesh_->n_vertices());
+
+        Surface_mesh::Halfedge_around_vertex_circulator vh_c, vh_end;
+        Scalar neighbour_temp;
+        Surface_mesh::Edge e;
+        Scalar laplace(0.0f);
+
+        for (unsigned int iter=0; iter<diffusion_iterations; ++iter) {
+            for (auto v: mesh_->vertices()) {
+                // save old temperature
+                bef_data[v.idx()] = v_temperature[v];
+            }
+            // calculate weights at each iteration
+            calc_edges_weights();
+
+            // compute weighted laplacian
+            for(auto v: mesh_->vertices()) {
+
+                if(v_is_source[v]) {
+                    continue;
+                }
+                vh_c = mesh_->halfedges(v);
+                vh_end = vh_c;
+
+                do {
+                    e = mesh_->edge(*vh_c);
+                    neighbour_temp = bef_data[(mesh_->to_vertex(*vh_c)).idx()];
+                    laplace += e_weight[e] * neighbour_temp;
+
+                } while(++vh_c != vh_end);
+
+                laplace *= v_weight[v];
+                v_temperature[v] = (1 - decay) * laplace;
+            }
+        }
+
+        // update temperature colors after all iterations
+        m_viewer->setTemperatureColor();
+
+    }
+
+    /** NEW! Uniform diffuse using laplacian formula */
     void uniform_diffuse() {
 
         cout << "Uniform diffusion with decay value : " << decay << " for " << diffusion_iterations << " iterations" <<  endl;
@@ -907,15 +984,13 @@ private:
         Surface_mesh::Vertex_property<Scalar> v_temp = mesh_->vertex_property<Scalar>("v:temperature",0.0);
         std::vector<Scalar> bef_data(mesh_->n_vertices());
 
-        Surface_mesh::Vertex_property<surface_mesh::Color> v_color_temp = mesh_->vertex_property<surface_mesh::Color>("v:color_temperature",
-                                                                                                                    surface_mesh::Color(1.0f, 1.0f, 1.0f));
-
         for (unsigned int iter=0; iter<diffusion_iterations; ++iter) {
-            // Save old temperatures
             for (auto v: mesh_->vertices()) {
+                // save old temperature
                 bef_data[v.idx()] = v_temp[v];
             }
             for (auto v: mesh_->vertices()){
+
                 // do not modify vertex temperature if the vertex is a source of temperature
                 if(v_is_source[v]) {
                     continue;
@@ -935,8 +1010,9 @@ private:
 
                 v_temp[v] = (1 - decay) * laplacian;
             }
-
         }
+
+        // update temperature colors after all iterations
         m_viewer->setTemperatureColor();
 
     }
