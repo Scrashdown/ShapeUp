@@ -110,15 +110,21 @@ public:
         Label* decay_label = new Label(popupDiff, "Decay: ");
         FloatBox<float>* decay_box = new FloatBox<float>(popupDiff);
         decay_box->setEditable(true);
+        decay_box->setDefaultValue("0.0");
+        decay_box->setMinValue(0.0f);
+        decay_box->setMaxValue(1.0f);
         decay_box->setCallback([this](float decay) {
-            this->decay = decay < 0 ? 0 : decay ;
+            // Clamp decay between 0.0 and 1.0
+            this->decay = max(0.0f, min(1.0f, decay));
         });
 
         /** NEW!  change number of iterations */
         Label* diff_iterations_label = new Label(popupDiff, "Iterations: ");
-        FloatBox<float>* diff_iterations_box = new FloatBox<float>(popupDiff);
+        IntBox<int>* diff_iterations_box = new IntBox<int>(popupDiff);
         diff_iterations_box->setEditable(true);
-        diff_iterations_box->setCallback([this](float iterations) {
+        diff_iterations_box->setDefaultValue("1");
+        diff_iterations_box->setMinValue(1);
+        diff_iterations_box->setCallback([this](int iterations) {
             this->diffusion_iterations = iterations < 1 ? 1 : iterations;
         });
 
@@ -720,17 +726,17 @@ private:
         Surface_mesh::Vertex_property<bool> v_is_source = mesh_->vertex_property<bool>("v:is_source", false);
         Surface_mesh::Vertex_property<Scalar> v_temp = mesh_->vertex_property<Scalar>("v:temperature",0.0);
         std::vector<Scalar> bef_data(mesh_->n_vertices());
-        for(auto v: mesh_->vertices()) {
-            bef_data[v.idx()] = v_temp[v];
-        }
 
         Surface_mesh::Vertex_property<surface_mesh::Color> v_color_temp = mesh_->vertex_property<surface_mesh::Color>("v:color_temperature",
                                                                                                                     surface_mesh::Color(1.0f, 1.0f, 1.0f));
 
         for (unsigned int iter=0; iter<diffusion_iterations; ++iter) {
+            // Save old temperatures
+            for (auto v: mesh_->vertices()) {
+                bef_data[v.idx()] = v_temp[v];
+            }
             // For each non-boundary vertex, update its temperature according to the uniform Laplacian operator
-            for( auto v: mesh_->vertices()){
-
+            for (auto v: mesh_->vertices()){
                 if(mesh_->is_boundary(v)) {
                     continue;
                 }
