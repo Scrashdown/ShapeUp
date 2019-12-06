@@ -920,102 +920,128 @@ private:
         }
     }
 
-    /** NEW! Weighted diffuse using cotan weights and laplacian formula */
-    void weighted_diffuse() {
-        cout << "Weighted diffusion with decay value : " << decay << " for " << diffusion_iterations << " iterations" <<  endl;
+    /**
+     * Enum type defining the different possible laplacian types
+     */
+    enum struct LaplacianType{
+        CONSTANT=1,
+        COTAN=2
+    };
 
-        auto mesh_ = m_viewer->getMesh();
-        Surface_mesh::Vertex_property<Scalar>  v_temperature =
-                mesh_->vertex_property<Scalar>("v:temperature", 0.0f);
-        Surface_mesh::Edge_property<Scalar> e_weight =
-                mesh_->edge_property<Scalar>("e:weight");
-        Surface_mesh::Vertex_property<Scalar>  v_weight =
-                mesh_->vertex_property<Scalar>("v:weight");
-        Surface_mesh::Vertex_property<bool> v_is_source = mesh_->vertex_property<bool>("v:is_source", false);
-        std::vector<Scalar> bef_data(mesh_->n_vertices());
+    /**
+     * Computes the update of ti, following the laplazian expression ti = ti + sum (tj-ti)*wi
+     * @param target The target vertex i, for which the temperature ti is to be updated
+     * @param mesh The mesh of target
+     * @param type Laplacian type. Influences the weighting.
+     * @param e_weight Edge weights. Useful in case of cotan Laplacian, ignored for constant (uniform) Laplace.
+     * @param temperature Temperature array, per vertex
+     * @return New value of the scalar ti for the target vertex
+     */
+    double normalizedTemperatureLaplacian(const Surface_mesh::Vertex &target, const Surface_mesh &mesh, const LaplacianType type,
+                                          const Surface_mesh::Edge_property<Scalar> &e_weight, const Surface_mesh::Vertex_property<Scalar> &temperature){
 
-        Surface_mesh::Halfedge_around_vertex_circulator vh_c, vh_end;
-        Scalar neighbour_temp;
-        Surface_mesh::Edge e;
-        Scalar laplace(0.0f);
-
-        for (unsigned int iter=0; iter<diffusion_iterations; ++iter) {
-            calc_weights();
-
-            for (auto v: mesh_->vertices()) {
-                // save old temperature
-                bef_data[v.idx()] = v_temperature[v];
-            }
-            cout << endl;
-
-            // compute weighted laplacian
-            for(auto v: mesh_->vertices()) {
-
-                if(v_is_source[v]) {
-                    continue;
+        Surface_mesh::Halfedge_around_vertex_circulator circulator(&mesh, target);
+        double total(0);
+        double weight_sum(0), weight(0), diff_timestep(0.499999);
+        double target_position = temperature[target];
+        if(circulator){
+            for(auto half_edge: circulator){
+                switch(type){
+                    case LaplacianType ::CONSTANT:
+                        weight = 1.0;
+                        break;
+                    case LaplacianType ::COTAN:
+                        weight=e_weight[mesh.edge(half_edge)];
+                        break;
                 }
-                vh_c = mesh_->halfedges(v);
-                vh_end = vh_c;
-
-                do {
-                    e = mesh_->edge(*vh_c);
-                    neighbour_temp = bef_data[(mesh_->to_vertex(*vh_c)).idx()];
-                    laplace += e_weight[e] * neighbour_temp;
-
-                } while(++vh_c != vh_end);
-
-                laplace *= v_weight[v];
-                v_temperature[v] = (1 - decay) * laplace;
+                weight_sum += weight;
+                total += (temperature[mesh.to_vertex(half_edge)] - target_position)*weight;
             }
         }
 
-        // update temperature colors after all iterations
+        if(weight_sum != 0.0){
+            total /= weight_sum;
+        }
+
+        return target_position + diff_timestep*total;
+    }
+
+    /**
+     * Updates temperatures of the provided mesh, according to a specific Laplacian rule update.
+     * @param mesh The target mesh
+     * @param v_new_temp Temporary array to hold the temperatures before update
+     * @param type Laplacian update type
+     * @param e_weight Edge weights of the mesh
+     * @param is_source Array property specifying which vertex of the mesh is a source
+     * @param temperatures Temperatures of each vertex
+     */
+    void applySmoothing(const Surface_mesh &mesh, Surface_mesh::Vertex_property<Scalar> &v_new_temp, const LaplacianType &type, const Surface_mesh::Edge_property<Scalar> &e_weight,
+            const Surface_mesh::Vertex_property<bool> &is_source, Surface_mesh::Vertex_property<Scalar> &temperatures){
+        for(auto vertex : mesh.vertices()) {
+            if(!mesh.is_boundary(vertex) && !is_source[vertex]){
+                switch(type){
+                    case LaplacianType::CONSTANT:
+                        v_new_temp[vertex]= normalizedTemperatureLaplacian(vertex, mesh, LaplacianType::CONSTANT,e_weight, temperatures);
+                        break;
+                    case LaplacianType ::COTAN:
+                        v_new_temp[vertex]= normalizedTemperatureLaplacian(vertex, mesh, LaplacianType::COTAN,e_weight, temperatures);
+                        break;
+                }
+            }
+        }
+
+        for(auto vertex: mesh.vertices()){
+            if(!mesh.is_boundary(vertex) && !is_source[vertex]){
+                temperatures[vertex] = v_new_temp[vertex];
+            }
+        }
+    }
+
+    /** NEW! Weighted diffuse using cotan weights and laplacian formula */
+    /**
+     * Performs cotan weighted Laplacian of the temperatures
+     */
+    void weighted_diffuse() {
+        cout << "Weighted diffusion with decay value : " << decay << " for " << diffusion_iterations << " iterations" <<  endl;
+
+        Surface_mesh::Vertex_around_vertex_circulator vv_c, vv_end;
+        double laplacian;
+        unsigned int w;
+        auto mesh_ = m_viewer->getMesh();
+        Surface_mesh::Vertex_property<Scalar> v_new_temp = mesh_->vertex_property<Scalar>("v:new_temperatures");
+        Surface_mesh::Vertex_property<bool> v_is_source = mesh_->vertex_property<bool>("v:is_source", false);
+        Surface_mesh::Vertex_property<Scalar> v_temp = mesh_->vertex_property<Scalar>("v:temperature",0.0);
+        Surface_mesh::Edge_property<Scalar> e_weight = mesh_->edge_property<Scalar>("e:weight", 0.0f);
+        for (unsigned int iter=0; iter<diffusion_iterations; ++iter) {
+            // For each non-boundary vertex, update its temperature according to the cotan Laplacian operator
+            calc_weights();
+            applySmoothing(*mesh_, v_new_temp, LaplacianType::COTAN, e_weight, v_is_source, v_temp);
+        }
+
         m_viewer->setTemperatureColor();
 
     }
 
-    /** NEW! Uniform diffuse using laplacian formula */
+    /**
+     * Performs uniform Laplacian update of the temperatures of the mesh
+     */
     void uniform_diffuse() {
-
         cout << "Uniform diffusion with decay value : " << decay << " for " << diffusion_iterations << " iterations" <<  endl;
-        auto mesh_ = m_viewer->getMesh();
+
         Surface_mesh::Vertex_around_vertex_circulator vv_c, vv_end;
-        float laplacian;
+        double laplacian;
+        unsigned int w;
+        auto mesh_ = m_viewer->getMesh();
+        Surface_mesh::Vertex_property<Scalar> v_new_temp = mesh_->vertex_property<Scalar>("v:new_temperatures");
         Surface_mesh::Vertex_property<bool> v_is_source = mesh_->vertex_property<bool>("v:is_source", false);
         Surface_mesh::Vertex_property<Scalar> v_temp = mesh_->vertex_property<Scalar>("v:temperature",0.0);
-        std::vector<Scalar> bef_data(mesh_->n_vertices());
-
+        Surface_mesh::Edge_property<Scalar> e_weight;
         for (unsigned int iter=0; iter<diffusion_iterations; ++iter) {
-            for (auto v: mesh_->vertices()) {
-                // save old temperature
-                bef_data[v.idx()] = v_temp[v];
-            }
-            for (auto v: mesh_->vertices()){
-
-                // do not modify vertex temperature if the vertex is a source of temperature
-                if(v_is_source[v]) {
-                    continue;
-                }
-
-                float t0 = bef_data[v.idx()];
-                vv_c = mesh_->vertices(v);
-                vv_end = vv_c;
-                float n = 1;
-                float sum_temp(t0);
-                do {
-                    float ti = bef_data[(*vv_c).idx()];
-                    sum_temp += ti;
-                    n += 1;
-                } while (++vv_c != vv_end);
-                laplacian = sum_temp / n;
-
-                v_temp[v] = (1 - decay) * laplacian;
-            }
+            // For each non-boundary vertex, update its temperature according to the uniform Laplacian operator
+            applySmoothing(*mesh_, v_new_temp, LaplacianType::CONSTANT, e_weight, v_is_source, v_temp);
         }
 
-        // update temperature colors after all iterations
         m_viewer->setTemperatureColor();
-
     }
 
 };
