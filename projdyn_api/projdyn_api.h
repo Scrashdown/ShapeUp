@@ -928,9 +928,9 @@ private:
         Surface_mesh::Vertex_property<Scalar>  v_temperature =
                 mesh_->vertex_property<Scalar>("v:temperature", 0.0f);
         Surface_mesh::Edge_property<Scalar> e_weight =
-                mesh_->edge_property<Scalar>("e:weight", 0.0f);
+                mesh_->edge_property<Scalar>("e:weight");
         Surface_mesh::Vertex_property<Scalar>  v_weight =
-                mesh_->vertex_property<Scalar>("v:weight", 0.0f);
+                mesh_->vertex_property<Scalar>("v:weight");
         Surface_mesh::Vertex_property<bool> v_is_source = mesh_->vertex_property<bool>("v:is_source", false);
         std::vector<Scalar> bef_data(mesh_->n_vertices());
 
@@ -940,12 +940,13 @@ private:
         Scalar laplace(0.0f);
 
         for (unsigned int iter=0; iter<diffusion_iterations; ++iter) {
+            calc_weights();
+
             for (auto v: mesh_->vertices()) {
                 // save old temperature
                 bef_data[v.idx()] = v_temperature[v];
             }
-            // calculate weights at each iteration
-            calc_edges_weights();
+            cout << endl;
 
             // compute weighted laplacian
             for(auto v: mesh_->vertices()) {
