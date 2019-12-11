@@ -18,6 +18,7 @@
 
 #include <surface_mesh/types.h>
 #include <surface_mesh/Surface_mesh.h>
+#include <igl/cotmatrix.h>
 
 class ProjDynAPI {
 public:

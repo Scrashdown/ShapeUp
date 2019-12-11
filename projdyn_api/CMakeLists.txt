@@ -6,3 +6,6 @@ target_link_libraries(projdyn_api INTERFACE surface_mesh)
 target_link_libraries(projdyn_api INTERFACE tetgen)
 target_link_libraries(projdyn_api INTERFACE viewer)
 target_link_libraries(projdyn_api INTERFACE nanogui ${NANOGUI_EXTRA_LIBS})
+
+find_package(LIBIGL REQUIRED QUIET)
+target_link_libraries(projdyn_api INTERFACE igl::core igl::opengl_glfw)

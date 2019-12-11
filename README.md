@@ -17,6 +17,10 @@ and on Redhead/Fedora, via:
 
 	$ sudo dnf install cmake mesa-libGLU-devel libXi-devel libXcursor-devel libXinerama-devel libXrandr-devel xorg-x11-server-devel
 
+This project also relies on the libigl library to work, imported as a submodule. It may be done with the following command if needs be:
+
+    $ git submodule add https://github.com/libigl/libigl.git external/libigl
+
 After that, simply build the project as usual:
 
 	mkdir build
