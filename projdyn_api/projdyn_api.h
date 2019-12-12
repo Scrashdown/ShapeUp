@@ -1040,10 +1040,16 @@ private:
 
     }
 
-    void init_temperatures(Eigen::SparseMatrix<double> &L){
+    /**
+     * If the m_temperatures array was not initialized yet, initialize it.
+     * The way this is done is by creating a vector of size n_vertices. The first n values (n the number of vertices on the surface of the mesh)
+     *  are copied back from the v:temperature vertex property. Other values are simply initialized to 0.
+     * @param n_vertices Number of vertices in the tetrahedralized mesh.
+     */
+    void init_temperatures(const unsigned int n_vertices){
         if(!init_temp){
             auto mesh_ = m_viewer->getMesh();
-            Eigen::VectorXd tmp_temps(L.rows());
+            Eigen::VectorXd tmp_temps(n_vertices);
             Surface_mesh::Vertex_property<Scalar> v_temp = mesh_->vertex_property<Scalar>("v:temperature",0.0);
 
             // Store fist these temperatures
@@ -1053,7 +1059,7 @@ private:
                 tmp_temps(i) = v_temp[v];
             }
 
-            for(Index j = i+1; j < L.rows(); ++j){
+            for(Index j = i+1; j < n_vertices; ++j){
                 tmp_temps(j) = 0.0;
             }
 
@@ -1088,21 +1094,23 @@ private:
             Eigen::SparseMatrix<double> M;
             igl::cotmatrix(m_simulator.getPositions(), m_simulator.getTetrahedrons(), M);
 
+            unsigned int n_vertices = M.rows();
+
             /// If the full temperatures (i.e: for all vertices in the volume) are not initialized, this function will
             /// ensure it is the case, while preserving temperatures of the already existing vertices.
             /// Otherwise it does nothing.
-            init_temperatures(M);
+            init_temperatures(n_vertices);
 
             /// We must now compute D^-1 , which is our only missing quantity.
             /// We will also compute D^-1 P(t), while we're at it, and store it as B=D^-1 P(t).
             std::vector<Eigen::Triplet<double> > triplets;
-            Eigen::MatrixXd B(M.rows(), 1);
+            Eigen::MatrixXd B(n_vertices, 1);
 
-            for (Index j = 0; j < M.rows(); ++j) {
+            for (Index j = 0; j < n_vertices; ++j) {
                 triplets.push_back(Eigen::Triplet<double>(j, j, 1.0));
                 B(j) = m_temperatures(j);
             }
-            Eigen::SparseMatrix<double> D(M.rows(), M.rows()); // The reason we store in a sparse matrix is to enable operations with M per Eigen specifications
+            Eigen::SparseMatrix<double> D(n_vertices, n_vertices); // The reason we store in a sparse matrix is to enable operations with M per Eigen specifications
             D.setFromTriplets(triplets.begin(), triplets.end());
 
             double diff_timestep(0.499999);
@@ -1117,13 +1125,12 @@ private:
             /// All that remains is to update the temperatures as well as the displayed temperatures!
             Surface_mesh::Vertex_property<Scalar> v_temp = mesh_->vertex_property<Scalar>("v:temperature", 0.0);
             auto v = mesh_->vertices().begin();
-            for (Index i = 0; i < M.rows(); ++i) {
+            for (Index i = 0; i < n_vertices; ++i) {
                 m_temperatures(i) = P(i, 0);
                 if (v != mesh_->vertices().end()) {
                     v_temp[*v] = P(i, 0);
                     ++v;
                 }
-
             }
         } else {
             Surface_mesh::Vertex_property<Scalar> v_new_temp = mesh_->vertex_property<Scalar>("v:new_temperatures");
