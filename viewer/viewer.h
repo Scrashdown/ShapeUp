@@ -469,6 +469,14 @@ public:
             this->temperature = !this->temperature;
         });
 
+        /** NEW: Toggle button for mesh surface display **/
+        b = new Button(window, "Display Mesh Surface");
+        b->setFlags(Button::ToggleButton);
+        b->setPushed(displaySurface);
+        b->setChangeCallback([this](bool displaySurface) {
+            this->displaySurface = !this->displaySurface;
+        });
+
         /** NEW: Box for temperature change **/
         Label* iterations_label = new Label(window, "Set Temperature: ");
         FloatBox<float>* iterations_box = new FloatBox<float>(window);
@@ -1258,6 +1266,8 @@ private:
 
     // Boolean for the viewer
     bool wireframe = false;
+    /** NEW: surface display boolean **/
+    bool displaySurface = true;
     /** NEW! Temperature boolean**/
     bool temperature = false;
     /** End NEW */
