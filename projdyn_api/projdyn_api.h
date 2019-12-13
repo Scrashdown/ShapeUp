@@ -18,6 +18,8 @@
 
 #include <surface_mesh/types.h>
 #include <surface_mesh/Surface_mesh.h>
+#include <igl/cotmatrix.h>
+#include <igl/massmatrix.h>
 
 class ProjDynAPI {
 public:
@@ -29,11 +31,17 @@ public:
 
     /** NEW values for diffusion : button toggling */
     bool diff_activated = false;
-    enum TEMP_DIFFUSION_TYPE : int { UNILAPLACE = 2};
+    enum TEMP_DIFFUSION_TYPE : int { UNILAPLACE = 2, COTANLAPLACE = 3};
     TEMP_DIFFUSION_TYPE diffusion_type = UNILAPLACE;
     float decay = 0.0f;
     int diffusion_iterations = 1;
     ///////////////////////////////////
+
+    Eigen::VectorXd m_temperatures;
+
+    bool init_temp = false;
+
+    bool is_tetra =false;
 
 
     ProjDynAPI(Viewer* viewer) {
@@ -97,6 +105,7 @@ public:
 
         Button* addtets_b = new Button(pd_win, "Tetrahedralize");
         addtets_b->setCallback([this]() {
+            is_tetra = true;
             setMesh(true);
         });
 
@@ -105,6 +114,37 @@ public:
         PopupButton* popupBtnDiff = new PopupButton(pd_win, "Temp. Diffuse", ENTYPO_ICON_LINK);
         Popup* popupDiff = popupBtnDiff->popup();
         popupDiff->setLayout(new GroupLayout());
+
+        Button* no_diff = new Button(popupDiff, "None");
+        Button* uniform = new Button(popupDiff, "Uniform");
+        Button* cotan = new Button(popupDiff, "Cotan");
+
+        no_diff->setFlags(Button::RadioButton);
+        no_diff->setPushed(true);
+        uniform->setFlags(Button::RadioButton);
+        cotan->setFlags(Button::RadioButton);
+
+        uniform->setCallback([this, popupBtnDiff, uniform, cotan]() {
+            this->diffusion_type = UNILAPLACE;
+            diff_activated = uniform->pushed();
+            uniform->setPushed(diff_activated);
+            cout << "Diffusion Activated: Uniform" << endl;
+            popupBtnDiff->setPushed(false);
+        });
+
+        cotan->setCallback([this, popupBtnDiff, uniform, cotan]() {
+            this->diffusion_type = COTANLAPLACE;
+            diff_activated = cotan->pushed();
+            cout << "Diffusion Activated: Weighted Cotan" << endl;
+            popupBtnDiff->setPushed(false);
+        });
+
+
+        no_diff->setCallback([this, popupBtnDiff, uniform, cotan]() {
+            diff_activated = false;
+            cout << "Diffusion DeActivated " << endl;
+            popupBtnDiff->setPushed(false);
+        });
 
         /** NEW!  change decay **/
         Label* decay_label = new Label(popupDiff, "Decay: ");
@@ -128,15 +168,6 @@ public:
             this->diffusion_iterations = iterations < 1 ? 1 : iterations;
         });
 
-        Button* c = new Button(popupDiff, "Uniform");
-        c->setFlags(Button::RadioButton);
-        c->setCallback([this, popupBtnDiff, c]() {
-            this->diffusion_type = UNILAPLACE;
-            diff_activated = !diff_activated;
-            cout << "Diffusion Activated: " << diff_activated << endl;
-            popupBtnDiff->setPushed(false);
-            c->setPushed(diff_activated);
-        });
         /////////////////////////////////////////////////////////////
 
         PopupButton* popupBtn = new PopupButton(pd_win, "Add constraints", ENTYPO_ICON_LINK);
@@ -363,13 +394,16 @@ public:
         // 2. Recompute LHS, RHS and update solver
         m_simulator.recomputeConstraintsPrecomputations();
         /** NEW! update temperature values if diffusion activated */
-        cout << "Attempting diffuse" << endl;
         if(diff_activated) {
             cout << "Diffusing temperatures ";
             switch(diffusion_type) {
                 case UNILAPLACE:
                     cout << "using uniform laplacian" << endl;
                     uniform_diffuse();
+                    break;
+                case COTANLAPLACE:
+                    cout << "using cotan weighted laplacian" << endl;
+                    weighted_diffuse();
                     break;
                 default:
                     break;
@@ -802,52 +836,315 @@ private:
         addConstraints(std::make_shared<ProjDyn::ConstraintGroup>("Edge Springs", spring_constraints, weight));
     }
 
-    /** NEW first try to uniform diffuse using laplacian formula */
+    /** Start of Mesh Processing functions
     //todo create class to harbor all processing
-    void uniform_diffuse() {
 
-        cout << "Uniform diffusion with decay value : " << decay << " for " << diffusion_iterations << " iterations" <<  endl;
+     *  Weight calculations are functions taken from:
+     *  //=============================================================================
+        //
+        //   Code framework for the lecture
+        //
+        //   "Digital 3D Geometry Processing"
+        //
+        //   Gaspard Zoss, Alexandru Ichim
+        //
+        //   Copyright (C) 2016 by Computer Graphics and Geometry Laboratory,
+        //         EPF Lausanne
+        //
+        //-----------------------------------------------------------------------------
+
+     *  */
+    void calc_weights() {
+        calc_edges_weights();
+        calc_vertices_weights();
+    }
+
+    void calc_edges_weights() {
         auto mesh_ = m_viewer->getMesh();
+        auto e_weight = mesh_->edge_property<Scalar>("e:weight", 0.0f);
+        auto points = mesh_->vertex_property<Point>("v:point");
+
+        Surface_mesh::Halfedge h0, h1, h2;
+        Point p0, p1, p2, d0, d1;
+
+        for (auto e: mesh_->edges())
+        {
+            e_weight[e] = 0.0;
+
+            h0 = mesh_->halfedge(e, 0);
+            p0 = points[mesh_->to_vertex(h0)];
+
+            h1 = mesh_->halfedge(e, 1);
+            p1 = points[mesh_->to_vertex(h1)];
+
+            if (!mesh_->is_boundary(h0))
+            {
+                h2 = mesh_->next_halfedge(h0);
+                p2 = points[mesh_->to_vertex(h2)];
+                d0 = p0 - p2;
+                d1 = p1 - p2;
+                e_weight[e] += dot(d0,d1) / norm(cross(d0,d1));
+            }
+
+            if (!mesh_->is_boundary(h1))
+            {
+                h2 = mesh_->next_halfedge(h1);
+                p2 = points[mesh_->to_vertex(h2)];
+                d0 = p0 - p2;
+                d1 = p1 - p2;
+                e_weight[e] += dot(d0,d1) / norm(cross(d0,d1));
+            }
+        }
+    }
+
+    void calc_vertices_weights() {
+        Surface_mesh::Face_around_vertex_circulator vf_c, vf_end;
+        Surface_mesh::Vertex_around_face_circulator fv_c;
+        Scalar area;
+        auto mesh_ = m_viewer->getMesh();
+        auto v_weight = mesh_->vertex_property<Scalar>("v:weight", 0.0f);
+
+        for (auto v: mesh_->vertices()) {
+            area = 0.0;
+            vf_c = mesh_->faces(v);
+
+            if(!vf_c) {
+                continue;
+            }
+
+            vf_end = vf_c;
+
+            do {
+                fv_c = mesh_->vertices(*vf_c);
+
+                const Point& P = mesh_->position(*fv_c);  ++fv_c;
+                const Point& Q = mesh_->position(*fv_c);  ++fv_c;
+                const Point& R = mesh_->position(*fv_c);
+
+                area += norm(cross(Q-P, R-P)) * 0.5f * 0.3333f;
+
+            } while(++vf_c != vf_end);
+
+            v_weight[v] = 0.5 / area;
+        }
+    }
+
+    /**
+     * Enum type defining the different possible laplacian types
+     */
+    enum struct LaplacianType{
+        CONSTANT=1,
+        COTAN=2
+    };
+
+    /**
+     * Computes the update of ti, following the laplazian expression ti = ti + sum (tj-ti)*wi
+     * @param target The target vertex i, for which the temperature ti is to be updated
+     * @param mesh The mesh of target
+     * @param type Laplacian type. Influences the weighting.
+     * @param e_weight Edge weights. Useful in case of cotan Laplacian, ignored for constant (uniform) Laplace.
+     * @param temperature Temperature array, per vertex
+     * @return New value of the scalar ti for the target vertex
+     */
+    double normalizedTemperatureLaplacian(const Surface_mesh::Vertex &target, const Surface_mesh &mesh, const LaplacianType type,
+                                          const Surface_mesh::Edge_property<Scalar> &e_weight, const Surface_mesh::Vertex_property<Scalar> &temperature){
+
+        Surface_mesh::Halfedge_around_vertex_circulator circulator(&mesh, target);
+        double total(0);
+        double weight_sum(0), weight(0), diff_timestep(0.499999);
+        double target_temperature = temperature[target];
+        if(circulator){
+            for(auto half_edge: circulator){
+                switch(type){
+                    case LaplacianType ::CONSTANT:
+                        weight = 1.0;
+                        break;
+                    case LaplacianType ::COTAN:
+                        weight=e_weight[mesh.edge(half_edge)];
+                        break;
+                }
+                weight_sum += weight;
+                total += (temperature[mesh.to_vertex(half_edge)] - target_temperature) * weight;
+            }
+        }
+
+        if(weight_sum != 0.0){
+            total /= weight_sum;
+        }
+
+        return target_temperature + diff_timestep * total;
+    }
+
+    double tetraNormalizedCotanLaplacian(const Surface_mesh &mesh, const LaplacianType &type){
+        // TODO: - iterate over neighbourhood of tetrahedron correctly (assess that it is the case with a simple mesh)
+        //       - compute cotan weights properly
+        //       - then compute Laplacian as always, but in this new neighbourhood instead
+        //       - don't forget to setup temperature for all vertices beforehand !
+        //       - don't forget to check the is_source array and the temperature.
+
+    }
+
+    /**
+     * Updates temperatures of the provided mesh, according to a specific Laplacian rule update.
+     * @param mesh The target mesh
+     * @param v_new_temp Temporary array to hold the temperatures before update
+     * @param type Laplacian update type
+     * @param e_weight Edge weights of the mesh
+     * @param is_source Array property specifying which vertex of the mesh is a source
+     * @param temperatures Temperatures of each vertex
+     */
+    void applySmoothing(const Surface_mesh &mesh, Surface_mesh::Vertex_property<Scalar> &v_new_temp, const LaplacianType &type, const Surface_mesh::Edge_property<Scalar> &e_weight,
+            const Surface_mesh::Vertex_property<bool> &is_source, Surface_mesh::Vertex_property<Scalar> &temperatures){
+        for(auto vertex : mesh.vertices()) {
+            if(!mesh.is_boundary(vertex) && !is_source[vertex]){
+                switch(type){
+                    case LaplacianType::CONSTANT:
+                        v_new_temp[vertex]= normalizedTemperatureLaplacian(vertex, mesh, LaplacianType::CONSTANT,e_weight, temperatures);
+                        break;
+                    case LaplacianType ::COTAN:
+                        v_new_temp[vertex]= normalizedTemperatureLaplacian(vertex, mesh, LaplacianType::COTAN,e_weight, temperatures);
+                        break;
+                }
+            }
+        }
+
+        for(auto vertex: mesh.vertices()){
+            if(!mesh.is_boundary(vertex) && !is_source[vertex]){
+                temperatures[vertex] = v_new_temp[vertex];
+            }
+        }
+    }
+
+    /** NEW! Weighted diffuse using cotan weights and laplacian formula */
+    /**
+     * Performs cotan weighted Laplacian of the temperatures
+     */
+    void weighted_diffuse() {
+        cout << "Weighted diffusion with decay value : " << decay << " for " << diffusion_iterations << " iterations" <<  endl;
+
         Surface_mesh::Vertex_around_vertex_circulator vv_c, vv_end;
-        float laplacian;
+        double laplacian;
+        unsigned int w;
+        auto mesh_ = m_viewer->getMesh();
+        Surface_mesh::Vertex_property<Scalar> v_new_temp = mesh_->vertex_property<Scalar>("v:new_temperatures");
         Surface_mesh::Vertex_property<bool> v_is_source = mesh_->vertex_property<bool>("v:is_source", false);
         Surface_mesh::Vertex_property<Scalar> v_temp = mesh_->vertex_property<Scalar>("v:temperature",0.0);
-        std::vector<Scalar> bef_data(mesh_->n_vertices());
-
-        Surface_mesh::Vertex_property<surface_mesh::Color> v_color_temp = mesh_->vertex_property<surface_mesh::Color>("v:color_temperature",
-                                                                                                                    surface_mesh::Color(1.0f, 1.0f, 1.0f));
-
+        Surface_mesh::Edge_property<Scalar> e_weight = mesh_->edge_property<Scalar>("e:weight", 0.0f);
         for (unsigned int iter=0; iter<diffusion_iterations; ++iter) {
-            // Save old temperatures
-            for (auto v: mesh_->vertices()) {
-                bef_data[v.idx()] = v_temp[v];
-            }
-            // For each non-boundary vertex, update its temperature according to the uniform Laplacian operator
-            for (auto v: mesh_->vertices()){
-                if(mesh_->is_boundary(v)) {
-                    continue;
-                }
-
-                float t0 = bef_data[v.idx()];
-                vv_c = mesh_->vertices(v);
-                vv_end = vv_c;
-                float n = 1;
-                float sum_temp(t0);
-                do {
-                    float ti = bef_data[(*vv_c).idx()];
-                    sum_temp += ti;
-                    n += 1;
-                } while (++vv_c != vv_end);
-                laplacian = sum_temp / n;
-                //v_temp[v] = t0 + decay * laplacian;
-                if(!v_is_source[v]) {
-                    v_temp[v] = (1 - decay) * laplacian;
-                }
-            }
-
+            // For each non-boundary vertex, update its temperature according to the cotan Laplacian operator
+            calc_weights();
+            applySmoothing(*mesh_, v_new_temp, LaplacianType::COTAN, e_weight, v_is_source, v_temp);
         }
+
         m_viewer->setTemperatureColor();
 
+    }
+
+    /**
+     * If the m_temperatures array was not initialized yet, initialize it.
+     * The way this is done is by creating a vector of size n_vertices. The first n values (n the number of vertices on the surface of the mesh)
+     *  are copied back from the v:temperature vertex property. Other values are simply initialized to 0.
+     * @param n_vertices Number of vertices in the tetrahedralized mesh.
+     */
+    void init_temperatures(const unsigned int n_vertices){
+        if(!init_temp){
+            auto mesh_ = m_viewer->getMesh();
+            Eigen::VectorXd tmp_temps(n_vertices);
+            Surface_mesh::Vertex_property<Scalar> v_temp = mesh_->vertex_property<Scalar>("v:temperature",0.0);
+
+            // Store fist these temperatures
+            Index i = 0;
+            for(auto v: mesh_->vertices()){
+                i = v.idx();
+                tmp_temps(i) = v_temp[v];
+            }
+
+            for(Index j = i+1; j < n_vertices; ++j){
+                tmp_temps(j) = 0.0;
+            }
+
+            init_temp = true;
+
+            m_temperatures = tmp_temps;
+        }
+    }
+
+    /**
+     * Performs uniform Laplacian update of the temperatures of the mesh
+     */
+    void uniform_diffuse() {
+        cout << "Uniform diffusion with decay value : " << decay << " for " << diffusion_iterations << " iterations" <<  endl;
+
+
+        Surface_mesh::Vertex_around_vertex_circulator vv_c, vv_end;
+        double laplacian;
+        unsigned int w;
+        auto mesh_ = m_viewer->getMesh();
+
+
+        if(is_tetra) {
+            /// THIS PART IS EXPERIMENTAL: IT WORKS UPON TETRAHEDRONS TO APPLY COTAN LAPLACIAN
+            /// The goal of this code is to solve the well known equation (D^-1  - delta * M) P(t+1) = D^-1 P(t),
+            /// for P(t+1). M is the matrix of cotangent weights. D^-1 is the matrix of volumes (we work in 3D!).
+            /// P(t) is the matrix of temperatures, obviously.
+
+            const ProjDyn::Tetrahedrons &tets = m_simulator.getTetrahedrons();
+
+            /// Computes the cotangent matrix M
+            Eigen::SparseMatrix<double> M;
+            igl::cotmatrix(m_simulator.getPositions(), m_simulator.getTetrahedrons(), M);
+
+            unsigned int n_vertices = M.rows();
+
+            /// If the full temperatures (i.e: for all vertices in the volume) are not initialized, this function will
+            /// ensure it is the case, while preserving temperatures of the already existing vertices.
+            /// Otherwise it does nothing.
+            init_temperatures(n_vertices);
+
+            /// We must now compute D^-1 , which is our only missing quantity.
+            /// We will also compute D^-1 P(t), while we're at it, and store it as B=D^-1 P(t).
+            std::vector<Eigen::Triplet<double> > triplets;
+            Eigen::MatrixXd B(n_vertices, 1);
+
+            for (Index j = 0; j < n_vertices; ++j) {
+                triplets.push_back(Eigen::Triplet<double>(j, j, 1.0));
+                B(j) = m_temperatures(j);
+            }
+            Eigen::SparseMatrix<double> D(n_vertices, n_vertices); // The reason we store in a sparse matrix is to enable operations with M per Eigen specifications
+            D.setFromTriplets(triplets.begin(), triplets.end());
+
+            double diff_timestep(0.499999);
+
+            const auto &S = (D - diff_timestep * M); // Because all quantities are sparse, we can directly perform the following !
+            Eigen::SimplicialLLT<Eigen::SparseMatrix<double> > solver(S);
+            assert(solver.info() == Eigen::Success);
+
+            /// The solver of the form Ax = B received A = (D^-1 - delta M). We give it B= D^-1 P(t), to retrieve at last P(t+1)
+            Eigen::MatrixXd P = solver.solve(B).eval(); // these are the new temperatures!
+
+            /// All that remains is to update the temperatures as well as the displayed temperatures!
+            Surface_mesh::Vertex_property<Scalar> v_temp = mesh_->vertex_property<Scalar>("v:temperature", 0.0);
+            auto v = mesh_->vertices().begin();
+            for (Index i = 0; i < n_vertices; ++i) {
+                m_temperatures(i) = P(i, 0);
+                if (v != mesh_->vertices().end()) {
+                    v_temp[*v] = P(i, 0);
+                    ++v;
+                }
+            }
+        } else {
+            Surface_mesh::Vertex_property<Scalar> v_new_temp = mesh_->vertex_property<Scalar>("v:new_temperatures");
+            Surface_mesh::Vertex_property<bool> v_is_source = mesh_->vertex_property<bool>("v:is_source", false);
+            Surface_mesh::Vertex_property<Scalar> v_temp = mesh_->vertex_property<Scalar>("v:temperature",0.0);
+
+            Surface_mesh::Edge_property<Scalar> e_weight;
+            for (unsigned int iter=0; iter<diffusion_iterations; ++iter) {
+                // For each non-boundary vertex, update its temperature according to the uniform Laplacian operator
+                applySmoothing(*mesh_, v_new_temp, LaplacianType::CONSTANT, e_weight, v_is_source, v_temp);
+            }
+        }
+
+        m_viewer->setTemperatureColor();
     }
 
 };
