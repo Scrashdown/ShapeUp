@@ -244,6 +244,18 @@ public:
             popupBtn->setPushed(false);
         });
 
+        /** NEW: button for adding position constraints **/
+        b = new Button(popup, "Positions");
+        b->setCallback([this, popupBtn]() {
+            bool was_active = m_simActive;
+            stop();
+            addPositionConstraintGroup();
+            if (was_active) {
+                start();
+            }
+            popupBtn->setPushed(false);
+        });
+
         Button* clear_b = new Button(pd_win, "Clear constraints");
         clear_b->setCallback([this]() {
             stop();
@@ -535,8 +547,12 @@ public:
 
                 const Scalar t0 = v_temperature[v0];
                 const Scalar t1 = v_temperature[v1];
-                const Scalar newWeight = edgeLen / (1.0 + 0.5 * (t0 + t1));
-                c->setWeight(newWeight);
+                const Scalar avgTemp = 0.5 * (t0 + t1);
+                if(avgTemp >= 200) {
+                    c->setWeight(0.0f);
+                } else {
+                    c->setWeight(edgeLen);
+                }
             }
 
             return;
@@ -758,6 +774,27 @@ public:
             addConstraints(std::make_shared<ProjDyn::ConstraintGroup>("Edge Temperature Elasticity", spring_constraints, weight));
             return true;
         }
+    }
+
+    void addPositionConstraintGroup(ProjDyn::Scalar weight= 1.0f) {
+        auto selected_verts = m_viewer->getSelectedVertices();
+        if(selected_verts.empty()) {
+            cout << "Please select vertices to fix positions" << endl;
+            return;
+        }
+        const ProjDyn::Positions& curPos = getPositions();
+        ProjDyn::Positions con_pos;
+        con_pos.setZero(selected_verts.size(), 3);
+        Index ind = 0;
+        for (Index v : selected_verts) {
+            con_pos.row(ind) = curPos.row(v);
+            ind++;
+        }
+        // Create constraint groups and add them to the simulation
+        std::shared_ptr<ProjDyn::PositionConstraintGroup> con = std::shared_ptr<ProjDyn::PositionConstraintGroup>(new ProjDyn::PositionConstraintGroup(selected_verts, weight, con_pos));
+
+        auto conGroup = std::make_shared<ProjDyn::ConstraintGroup>("Fixed Pos.", std::vector<ProjDyn::ConstraintPtr>({ con }), 1.);
+        addConstraints(conGroup);
     }
 
     // Gets called when the user is grabbing some vertices with the mouse
