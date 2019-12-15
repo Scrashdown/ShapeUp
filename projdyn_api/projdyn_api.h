@@ -401,9 +401,10 @@ public:
         }
 
         /** NEW: update elasticity constraints based on temperature **/
-        // 1. Update temperature edge spring constraints
-        updateEdgeTemperatureElasticityConstraints();
+        // 1. Update temperature edge spring and triangle bending constraints
+        updateTemperatureConstraints();
         // 2. Recompute LHS, RHS and update solver
+        // TODO verify we recompute all required things for triangle bending too
         m_simulator.recomputeConstraintsPrecomputations();
         /** NEW! update temperature values if diffusion activated */
         if(diff_activated) {
@@ -527,7 +528,7 @@ public:
     }
 
     // Update elasticity constraints based on temperature
-    void updateEdgeTemperatureElasticityConstraints() {
+    void updateTemperatureConstraints() {
         Surface_mesh* mesh = m_viewer->getMesh();
         const ProjDyn::Positions& sim_verts = m_simulator.getInitialPositions();
         Surface_mesh::Vertex_property<Scalar> v_temperature = mesh->vertex_property<Scalar>("v:temperature", 0.0);
@@ -535,7 +536,7 @@ public:
         const auto groups = m_simulator.getConstraintGroups();
 
         // Find group of temperature based constraints, return false if it doesn't exist
-        const auto elem = groups.find("Edge Temperature Elasticity");
+        auto elem = groups.find("Edge Temperature Elasticity");
         if (elem != groups.end()) {
             auto cg = elem->second;
             // Recompute weight of each constraint of the group and update
@@ -549,16 +550,39 @@ public:
                 const Scalar t1 = v_temperature[v1];
                 const Scalar avgTemp = 0.5 * (t0 + t1);
                 if(avgTemp >= 200) {
-                    c->setWeight(0.0f);
+                    c->setWeight(0.001f);
                 } else {
                     c->setWeight(edgeLen);
                 }
             }
 
             return;
+        } else {
+            std::cout << "Warning: no temperature elasticity constraint group found." << std::endl;
         }
 
-        std::cout << "Warning: no temperature elasticity constraint group found." << std::endl;
+        // Find group of triangle bending constraints
+        elem = groups.find("Tri Bending");
+        if (elem != groups.end()) {
+            const auto cg = elem->second;
+            // Recompute weight of each constraint in the group
+            for (const auto c: cg->constraints) {
+                const std::vector<Index>& vIndices = c->getIndices();
+                const Scalar edgeLen = (sim_verts.row(vIndices[0]) - sim_verts.row(vIndices[1])).norm();
+                const auto v0 = v_lookup_table[vIndices[0]];
+                const auto v1 = v_lookup_table[vIndices[1]];
+
+                const Scalar t0 = v_temperature[v0];
+                const Scalar t1 = v_temperature[v1];
+                const Scalar avgTemp = 0.5 * (t0 + t1);
+
+                if (avgTemp >= 200) {
+                    c->setWeight(0.001f);
+                } else {
+                    c->setWeight(edgeLen);
+                }
+            }
+        }
     }
 
     // Set external forces to point into downwards y direction with a certain magnitude
