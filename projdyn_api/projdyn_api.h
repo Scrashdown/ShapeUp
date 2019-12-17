@@ -104,6 +104,8 @@ public:
 
 
         Button* addtets_b = new Button(pd_win, "Tetrahedralize");
+        addtets_b->setFlags(Button::RadioButton);
+        addtets_b->setPushed(false);
         addtets_b->setCallback([this]() {
             is_tetra = true;
             setMesh(true);
@@ -372,6 +374,7 @@ public:
                 return false;
             }
             vertices = vol_verts;
+            init_temperatures(vertices.size());
         }
 
         // Set the mesh in the simulator
@@ -542,21 +545,21 @@ public:
             // Recompute weight of each constraint of the group and update
             for (const auto c : cg->constraints) {
                 const std::vector<Index>& vIndices = c->getIndices();
-                const Scalar edgeLen = (sim_verts.row(vIndices[0]) - sim_verts.row(vIndices[1])).norm();
-                const auto v0 = v_lookup_table[vIndices[0]];
-                const auto v1 = v_lookup_table[vIndices[1]];
 
-                const Scalar t0 = v_temperature[v0];
-                const Scalar t1 = v_temperature[v1];
+                // Each vertex may either be on the surface or in the interior
+                const auto t0 = vIndices[0] < mesh->n_vertices() ?
+                    v_temperature[v_lookup_table[vIndices[0]]] : m_temperatures[vIndices[0]];
+                const auto t1 = vIndices[1] < mesh->n_vertices() ?
+                    v_temperature[v_lookup_table[vIndices[1]]] : m_temperatures[vIndices[1]];
+
                 const Scalar avgTemp = 0.5 * (t0 + t1);
-                if(avgTemp >= 200) {
-                    c->setWeight(0.001f);
+                if (avgTemp >= 200) {
+                    c->setWeight(0.0001f);
                 } else {
+                    const Scalar edgeLen = (sim_verts.row(vIndices[0]) - sim_verts.row(vIndices[1])).norm();
                     c->setWeight(edgeLen);
                 }
             }
-
-            return;
         } else {
             std::cout << "Warning: no temperature elasticity constraint group found." << std::endl;
         }
@@ -582,6 +585,8 @@ public:
                     c->setWeight(edgeLen);
                 }
             }
+        } else {
+            std::cout << "Warning: no temperature elasticity constraint group found." << std::endl;
         }
     }
 
@@ -766,10 +771,9 @@ public:
     }
 
     /** NEW: Add edge springs based on temperature of each edge (avg temp of both vertices) **/
-    bool addEdgeTemperatureElasticityConstraints(ProjDyn::Scalar weight = 1.) {
+    void addEdgeTemperatureElasticityConstraints(ProjDyn::Scalar weight = 1.) {
         if (m_simulator.getTetrahedrons().rows() > 0) {
-            std::cout << "Warning: cannot be applied to tetrahedralized meshes for now" << std::endl;
-            return false;
+            addEdgeTemperatureSpringConstraintsTets(weight);
         }
         else {
             const ProjDyn::Positions& sim_verts = m_simulator.getInitialPositions();
@@ -796,7 +800,6 @@ public:
                 }
             }
             addConstraints(std::make_shared<ProjDyn::ConstraintGroup>("Edge Temperature Elasticity", spring_constraints, weight));
-            return true;
         }
     }
 
@@ -895,6 +898,34 @@ private:
 
         // Add constraints
         addConstraints(std::make_shared<ProjDyn::ConstraintGroup>("Edge Springs", spring_constraints, weight));
+    }
+
+    void addEdgeTemperatureSpringConstraintsTets(ProjDyn::Scalar weight = 1.) {
+        const ProjDyn::Positions& sim_verts = m_simulator.getInitialPositions();
+        std::vector<ProjDyn::ConstraintPtr> spring_constraints;
+        const ProjDyn::Tetrahedrons& tets = m_simulator.getTetrahedrons();
+        // If tets are available, add a spring on each tet-edge
+        for (Index i = 0; i < tets.rows(); i++) {
+            for (int j = 0; j < 4; j++) {
+                std::vector<ProjDyn::Index> edge;
+                edge.push_back(tets(i, j));
+                edge.push_back(tets(i, (j + 1) % 4));
+                // Easy way to make sure each edge only gets added once:
+                if (edge[0] < edge[1]) {
+                    // The weight is set to the edge length
+                    ProjDyn::Scalar w = (sim_verts.row(edge[0]) - sim_verts.row(edge[1])).norm();
+                    if (w > 1e-6) {
+                        // The constraint is constructed, made into a shared pointer and appended to the list
+                        // of constraints.
+                        ProjDyn::EdgeSpringConstraint* esc = new ProjDyn::EdgeSpringConstraint(edge, w, sim_verts);
+                        spring_constraints.push_back(std::shared_ptr<ProjDyn::EdgeSpringConstraint>(esc));
+                    }
+                }
+            }
+        }
+
+        // Add constraints
+        addConstraints(std::make_shared<ProjDyn::ConstraintGroup>("Edge Temperature Elasticity", spring_constraints, weight));
     }
 
     /** Start of Mesh Processing functions
