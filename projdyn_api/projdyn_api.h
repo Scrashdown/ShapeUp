@@ -543,7 +543,7 @@ public:
         if (elem != groups.end()) {
             auto cg = elem->second;
             // Recompute weight of each constraint of the group and update
-            for (const auto c : cg->constraints) {
+            for (auto c : cg->constraints) {
                 const std::vector<Index>& vIndices = c->getIndices();
 
                 // Each vertex may either be on the surface or in the interior
@@ -555,6 +555,9 @@ public:
                 const Scalar avgTemp = 0.5 * (t0 + t1);
                 if (avgTemp >= 200) {
                     c->setWeight(0.0001f);
+                    std::shared_ptr<ProjDyn::EdgeSpringConstraint> p_deri = std::dynamic_pointer_cast<ProjDyn::EdgeSpringConstraint>(c);
+                    p_deri->setRestLength((sim_verts.row(vIndices[0]) - sim_verts.row(vIndices[1])).norm());
+
                 } else {
                     const Scalar edgeLen = (sim_verts.row(vIndices[0]) - sim_verts.row(vIndices[1])).norm();
                     c->setWeight(edgeLen);
