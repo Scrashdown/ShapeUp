@@ -312,11 +312,11 @@ public:
         std::uniform_int_distribution<int> distribution(0,255);
 
         for(auto v: mesh.vertices()){
-            v_temperature[v] = distribution(generator);
+            v_temperature[v] = 0;// distribution(generator);
         }
 
         /** Converts temperature scalar to color vector **/
-        color_coding(v_temperature, &mesh, v_color_temperature,255);
+        color_coding(v_temperature, &mesh, v_color_temperature,20000);
 
         int j = 0;
         MatrixXf mesh_points(3, n_vertices);
@@ -1018,20 +1018,20 @@ public:
     void color_coding(Surface_mesh::Vertex_property<Scalar> prop, Surface_mesh *mesh,
                       Surface_mesh::Vertex_property<surface_mesh::Color> color_prop, int bound=20) {
         // Get the value array
-        std::vector<Scalar> values = prop.vector();
+        //std::vector<Scalar> values = prop.vector();
 
-        // discard upper and lower bound
+        /*// discard upper and lower bound
         unsigned int n = values.size()-1;
         unsigned int i = n / bound;
         std::sort(values.begin(), values.end());
-        Scalar min_value = values[i], max_value = values[n-1-i];
-        c_min_value = min_value;
-        c_max_value = max_value;
+        Scalar min_value = values[i], max_value = values[n-1-i];*/
+        c_min_value = 0;
+        c_max_value = bound;
 
         // map values to colors
         for (auto v: mesh->vertices())
         {
-            set_color(v, value_to_color(prop[v], min_value, max_value), color_prop);
+            set_color(v, value_to_color(prop[v], 0, bound), color_prop);
         }
     }
 

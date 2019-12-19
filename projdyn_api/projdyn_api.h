@@ -1227,7 +1227,7 @@ private:
             Eigen::SparseMatrix<double> M(n_vertices, n_vertices); // The reason we store in a sparse matrix is to enable operations with L per Eigen specifications
             M.setFromTriplets(triplets.begin(), triplets.end());
 
-            double diff_timestep(0.0001);
+            double diff_timestep(0.001);
 
             const auto &S = (M - diff_timestep * L); // Because all quantities are sparse, we can directly perform the following !
             Eigen::SimplicialLLT<Eigen::SparseMatrix<double>> solver(S);
