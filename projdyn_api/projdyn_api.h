@@ -30,6 +30,9 @@ public:
     const bool DYNAMIC_MODE = true;
     int positionGroupConstraintsNum = 1;
 
+    //GUI objects modified in the tetrahedralized case
+    Button* uniformDiffButton;
+
     /** NEW values for diffusion : button toggling */
     bool diff_activated = false;
     enum TEMP_DIFFUSION_TYPE : int { UNILAPLACE = 2, COTANLAPLACE = 3};
@@ -110,6 +113,7 @@ public:
         addtets_b->setCallback([this]() {
             is_tetra = true;
             setMesh(true);
+            uniformDiffButton->setVisible(false);
         });
 
 
@@ -120,6 +124,7 @@ public:
 
         Button* no_diff = new Button(popupDiff, "None");
         Button* uniform = new Button(popupDiff, "Uniform");
+        uniformDiffButton = uniform;
         Button* cotan = new Button(popupDiff, "Cotan");
 
         no_diff->setFlags(Button::RadioButton);
@@ -147,18 +152,6 @@ public:
             diff_activated = false;
             cout << "Diffusion DeActivated " << endl;
             popupBtnDiff->setPushed(false);
-        });
-
-        /** NEW!  change decay **/
-        Label* decay_label = new Label(popupDiff, "Decay: ");
-        FloatBox<float>* decay_box = new FloatBox<float>(popupDiff);
-        decay_box->setEditable(true);
-        decay_box->setDefaultValue("0.0");
-        decay_box->setMinValue(0.0f);
-        decay_box->setMaxValue(1.0f);
-        decay_box->setCallback([this](float decay) {
-            // Clamp decay between 0.0 and 1.0
-            this->decay = max(0.0f, min(1.0f, decay));
         });
 
         /** NEW!  change number of iterations */
@@ -265,6 +258,7 @@ public:
             clearConstraints();
             m_simulator.resetPositions();
             m_viewer->showFloor(false);
+            m_restLengths.clear();
             uploadPositions();
             updateConstraintsGUI();
         });
