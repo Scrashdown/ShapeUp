@@ -552,7 +552,7 @@ namespace ProjDyn {
             }
         }
 
-        virtual Index getCenterVertexId() const { return m_vertex_id; }
+        virtual Index getCenterVertexId() { return m_vertex_id; }
 
         virtual void setMeanCurvature(Scalar voronoiArea,
                                       const Positions& positions) {

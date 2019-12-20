@@ -540,6 +540,10 @@ public:
         const auto v_lookup_table = m_viewer->getVertexLookupTable();
         const auto groups = m_simulator.getConstraintGroups();
 
+        /// Voronoi areas are necessary to update mean curvature!
+        ProjDyn::Vector voronoiAreas = ProjDyn::vertexMasses(m_simulator.getPositions(), m_simulator.getTriangles());
+
+        cout << "Ok, go" <<endl;
         // Find group of temperature based constraints, return false if it doesn't exist
         auto elem = groups.find("Edge Temperature Elasticity");
         if (elem != groups.end()) {
@@ -587,9 +591,6 @@ public:
         elem = groups.find("Tri Bending");
         if (elem != groups.end()) {
             const auto cg = elem->second;
-            /// Voronoi areas are necessary to update mean curvature!
-            ProjDyn::Vector voronoiAreas = ProjDyn::vertexMasses(m_simulator.getPositions(), m_simulator.getTriangles());
-
             // Recompute weight of each constraint in the group
             for (const auto c: cg->constraints) {
 
@@ -597,9 +598,13 @@ public:
                 const std::vector<Index>& vIndices = c->getIndices();
                 Scalar avgTemp(0.0);
                 for(auto index: vIndices){
-                    avgTemp += v_temperature[v_lookup_table[vIndices[index]]];
+                    if(index >= mesh->n_vertices()){
+                        cout << "oh no" << endl;
+                    } else {
+                        avgTemp += v_temperature[v_lookup_table[index]];
+                    }
                 }
-                
+
                 if(vIndices.size() != 0){
                     avgTemp /= vIndices.size();
                 }
