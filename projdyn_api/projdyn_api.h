@@ -557,6 +557,23 @@ public:
 
                 const Scalar avgTemp = 0.5 * (t0 + t1);
                 c->setWeight(1.0 / (avgTemp + 1.0));
+
+                std::shared_ptr<ProjDyn::EdgeSpringConstraint> p_deri = std::dynamic_pointer_cast<ProjDyn::EdgeSpringConstraint>(c);
+                Scalar length;
+                if (avgTemp >= 200) {
+                    length=(curr_pos.row(vIndices[0]) - curr_pos.row(vIndices[1])).norm();
+                } else {
+                    if (m_restLengths.count(i) == 0) {
+                        length = (sim_verts.row(vIndices[0]) - sim_verts.row(vIndices[1])).norm();
+
+                    } else {
+                        length = m_restLengths[i];
+                    }
+                }
+
+                p_deri->setRestLength(length);
+                m_restLengths[i] = length;
+
                 ++i;
             }
         }
