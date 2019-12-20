@@ -534,6 +534,7 @@ public:
     void updateTemperatureConstraints() {
         Surface_mesh* mesh = m_viewer->getMesh();
         const ProjDyn::Positions& sim_verts = m_simulator.getInitialPositions();
+        const ProjDyn::Positions& curr_pos = m_simulator.getPositions();
         Surface_mesh::Vertex_property<Scalar> v_temperature = mesh->vertex_property<Scalar>("v:temperature", 0.0);
         const auto v_lookup_table = m_viewer->getVertexLookupTable();
         const auto groups = m_simulator.getConstraintGroups();
@@ -543,6 +544,7 @@ public:
         if (elem != groups.end()) {
             auto cg = elem->second;
             // Recompute weight of each constraint of the group and update
+            Index i = 0;
             for (auto c : cg->constraints) {
                 const std::vector<Index>& vIndices = c->getIndices();
 
@@ -556,12 +558,22 @@ public:
                 if (avgTemp >= 200) {
                     c->setWeight(0.0001f);
                     std::shared_ptr<ProjDyn::EdgeSpringConstraint> p_deri = std::dynamic_pointer_cast<ProjDyn::EdgeSpringConstraint>(c);
-                    p_deri->setRestLength((sim_verts.row(vIndices[0]) - sim_verts.row(vIndices[1])).norm());
+                    Scalar length = (curr_pos.row(vIndices[0]) - curr_pos.row(vIndices[1])).norm();
+                    p_deri->setRestLength(length);
+                    m_restLengths[i] = length;
 
                 } else {
-                    const Scalar edgeLen = (sim_verts.row(vIndices[0]) - sim_verts.row(vIndices[1])).norm();
-                    c->setWeight(edgeLen);
+
+                    if(m_restLengths.count(i) > 0){
+                        c->setWeight(m_restLengths[i]);
+                    } else {
+                        const Scalar edgeLen = (sim_verts.row(vIndices[0]) - sim_verts.row(vIndices[1])).norm();
+                        c->setWeight(edgeLen);
+                        m_restLengths[i] = edgeLen;
+                    }
+
                 }
+                ++i;
             }
         } else {
             std::cout << "Warning: no temperature elasticity constraint group found." << std::endl;
@@ -589,7 +601,7 @@ public:
                 }
             }
         } else {
-            std::cout << "Warning: no temperature elasticity constraint group found." << std::endl;
+            std::cout << "Warning: no tri-bending constraint group found." << std::endl;
         }
     }
 
@@ -874,6 +886,7 @@ private:
     Button* m_startButton = nullptr;
     Button* m_stopButton = nullptr;
     bool m_updateNormals = UPDATE_NORMALS;
+    std::unordered_map<Index, ProjDyn::Scalar> m_restLengths;
 
     void addEdgeSpringConstraintsTets(ProjDyn::Scalar weight = 1.) {
         const ProjDyn::Positions& sim_verts = m_simulator.getInitialPositions();
@@ -889,6 +902,7 @@ private:
                 if (edge[0] < edge[1]) {
                     // The weight is set to the edge length
                     ProjDyn::Scalar w = (sim_verts.row(edge[0]) - sim_verts.row(edge[1])).norm();
+                    m_restLengths[m_restLengths.size()] = w;
                     if (w > 1e-6) {
                         // The constraint is constructed, made into a shared pointer and appended to the list
                         // of constraints.
