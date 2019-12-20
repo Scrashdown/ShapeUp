@@ -105,6 +105,8 @@ public:
 
 
         Button* addtets_b = new Button(pd_win, "Tetrahedralize");
+        addtets_b->setFlags(Button::RadioButton);
+        addtets_b->setPushed(false);
         addtets_b->setCallback([this]() {
             is_tetra = true;
             setMesh(true);
@@ -373,6 +375,7 @@ public:
                 return false;
             }
             vertices = vol_verts;
+            init_temperatures(vertices.size());
         }
 
         // Set the mesh in the simulator
@@ -541,23 +544,26 @@ public:
         if (elem != groups.end()) {
             auto cg = elem->second;
             // Recompute weight of each constraint of the group and update
-            for (const auto c : cg->constraints) {
+            for (auto c : cg->constraints) {
                 const std::vector<Index>& vIndices = c->getIndices();
-                const Scalar edgeLen = (sim_verts.row(vIndices[0]) - sim_verts.row(vIndices[1])).norm();
-                const auto v0 = v_lookup_table[vIndices[0]];
-                const auto v1 = v_lookup_table[vIndices[1]];
 
-                const Scalar t0 = v_temperature[v0];
-                const Scalar t1 = v_temperature[v1];
+                // Each vertex may either be on the surface or in the interior
+                const auto t0 = vIndices[0] < mesh->n_vertices() ?
+                    v_temperature[v_lookup_table[vIndices[0]]] : m_temperatures[vIndices[0]];
+                const auto t1 = vIndices[1] < mesh->n_vertices() ?
+                    v_temperature[v_lookup_table[vIndices[1]]] : m_temperatures[vIndices[1]];
+
                 const Scalar avgTemp = 0.5 * (t0 + t1);
-                if(avgTemp >= 200) {
-                    c->setWeight(0.001f);
+                if (avgTemp >= 200) {
+                    c->setWeight(0.0001f);
+                    std::shared_ptr<ProjDyn::EdgeSpringConstraint> p_deri = std::dynamic_pointer_cast<ProjDyn::EdgeSpringConstraint>(c);
+                    p_deri->setRestLength((sim_verts.row(vIndices[0]) - sim_verts.row(vIndices[1])).norm());
+
                 } else {
+                    const Scalar edgeLen = (sim_verts.row(vIndices[0]) - sim_verts.row(vIndices[1])).norm();
                     c->setWeight(edgeLen);
                 }
             }
-
-            return;
         } else {
             std::cout << "Warning: no temperature elasticity constraint group found." << std::endl;
         }
@@ -583,6 +589,8 @@ public:
                     c->setWeight(edgeLen);
                 }
             }
+        } else {
+            std::cout << "Warning: no temperature elasticity constraint group found." << std::endl;
         }
     }
 
@@ -768,10 +776,9 @@ public:
     }
 
     /** NEW: Add edge springs based on temperature of each edge (avg temp of both vertices) **/
-    bool addEdgeTemperatureElasticityConstraints(ProjDyn::Scalar weight = 1.) {
+    void addEdgeTemperatureElasticityConstraints(ProjDyn::Scalar weight = 1.) {
         if (m_simulator.getTetrahedrons().rows() > 0) {
-            std::cout << "Warning: cannot be applied to tetrahedralized meshes for now" << std::endl;
-            return false;
+            addEdgeTemperatureSpringConstraintsTets(weight);
         }
         else {
             const ProjDyn::Positions& sim_verts = m_simulator.getInitialPositions();
@@ -798,7 +805,6 @@ public:
                 }
             }
             addConstraints(std::make_shared<ProjDyn::ConstraintGroup>("Edge Temperature Elasticity", spring_constraints, weight));
-            return true;
         }
     }
 
@@ -899,6 +905,34 @@ private:
 
         // Add constraints
         addConstraints(std::make_shared<ProjDyn::ConstraintGroup>("Edge Springs", spring_constraints, weight));
+    }
+
+    void addEdgeTemperatureSpringConstraintsTets(ProjDyn::Scalar weight = 1.) {
+        const ProjDyn::Positions& sim_verts = m_simulator.getInitialPositions();
+        std::vector<ProjDyn::ConstraintPtr> spring_constraints;
+        const ProjDyn::Tetrahedrons& tets = m_simulator.getTetrahedrons();
+        // If tets are available, add a spring on each tet-edge
+        for (Index i = 0; i < tets.rows(); i++) {
+            for (int j = 0; j < 4; j++) {
+                std::vector<ProjDyn::Index> edge;
+                edge.push_back(tets(i, j));
+                edge.push_back(tets(i, (j + 1) % 4));
+                // Easy way to make sure each edge only gets added once:
+                if (edge[0] < edge[1]) {
+                    // The weight is set to the edge length
+                    ProjDyn::Scalar w = (sim_verts.row(edge[0]) - sim_verts.row(edge[1])).norm();
+                    if (w > 1e-6) {
+                        // The constraint is constructed, made into a shared pointer and appended to the list
+                        // of constraints.
+                        ProjDyn::EdgeSpringConstraint* esc = new ProjDyn::EdgeSpringConstraint(edge, w, sim_verts);
+                        spring_constraints.push_back(std::shared_ptr<ProjDyn::EdgeSpringConstraint>(esc));
+                    }
+                }
+            }
+        }
+
+        // Add constraints
+        addConstraints(std::make_shared<ProjDyn::ConstraintGroup>("Edge Temperature Elasticity", spring_constraints, weight));
     }
 
     /** Start of Mesh Processing functions
@@ -1040,15 +1074,6 @@ private:
         return target_temperature + diff_timestep * total;
     }
 
-    double tetraNormalizedCotanLaplacian(const Surface_mesh &mesh, const LaplacianType &type){
-        // TODO: - iterate over neighbourhood of tetrahedron correctly (assess that it is the case with a simple mesh)
-        //       - compute cotan weights properly
-        //       - then compute Laplacian as always, but in this new neighbourhood instead
-        //       - don't forget to setup temperature for all vertices beforehand !
-        //       - don't forget to check the is_source array and the temperature.
-
-    }
-
     /**
      * Updates temperatures of the provided mesh, according to a specific Laplacian rule update.
      * @param mesh The target mesh
@@ -1080,9 +1105,45 @@ private:
         }
     }
 
-    /** NEW! Weighted diffuse using cotan weights and laplacian formula */
+    /**
+     * If the m_temperatures array was not initialized yet, initialize it.
+     * The way this is done is by creating a vector of size n_vertices. The first n values (n the number of vertices on the surface of the mesh)
+     *  are copied back from the v:temperature vertex property. Other values are simply initialized to 0.
+     *  If the mesh was initialized, the temperatures of the envelope are still copied back (in case user updated them). Others are unchanged.
+     * @param n_vertices Number of vertices in the tetrahedralized mesh.
+     */
+    void init_temperatures(const unsigned int n_vertices){
+        auto mesh_ = m_viewer->getMesh();
+        Eigen::VectorXd tmp_temps(n_vertices);
+        Surface_mesh::Vertex_property<Scalar> v_temp = mesh_->vertex_property<Scalar>("v:temperature",0.0);
+
+        // Store fist these temperatures
+        Index i = 0;
+        for(auto v: mesh_->vertices()){
+            i = v.idx();
+            tmp_temps(i) = v_temp[v];
+        }
+        if(!init_temp){
+
+            for(Index j = i+1; j < n_vertices; ++j){
+                tmp_temps(j) = 0.0;
+            }
+
+            init_temp = true;
+        } else {
+            for(Index j = i+1; j < n_vertices; ++j){
+                tmp_temps(j) = m_temperatures(j);
+            }
+        }
+
+        m_temperatures = tmp_temps;
+    }
+
     /**
      * Performs cotan weighted Laplacian of the temperatures
+     * Updates the mesh's temperatures according to the heat equation, using cotangent weights.
+     * The cotan weighted Laplacian is either surface-based for regular meshes, or volumetric, in case of tetrahedralized meshes.
+     * Once new temperatures have been computed, it also updates the displayed temperatures for visualization.
      */
     void weighted_diffuse() {
         cout << "Weighted diffusion with decay value : " << decay << " for " << diffusion_iterations << " iterations" <<  endl;
@@ -1091,112 +1152,147 @@ private:
         double laplacian;
         unsigned int w;
         auto mesh_ = m_viewer->getMesh();
-        Surface_mesh::Vertex_property<Scalar> v_new_temp = mesh_->vertex_property<Scalar>("v:new_temperatures");
-        Surface_mesh::Vertex_property<bool> v_is_source = mesh_->vertex_property<bool>("v:is_source", false);
-        Surface_mesh::Vertex_property<Scalar> v_temp = mesh_->vertex_property<Scalar>("v:temperature",0.0);
-        Surface_mesh::Edge_property<Scalar> e_weight = mesh_->edge_property<Scalar>("e:weight", 0.0f);
-        for (unsigned int iter=0; iter<diffusion_iterations; ++iter) {
-            // For each non-boundary vertex, update its temperature according to the cotan Laplacian operator
-            calc_weights();
-            applySmoothing(*mesh_, v_new_temp, LaplacianType::COTAN, e_weight, v_is_source, v_temp);
-        }
 
-        m_viewer->setTemperatureColor();
-
-    }
-
-    /**
-     * If the m_temperatures array was not initialized yet, initialize it.
-     * The way this is done is by creating a vector of size n_vertices. The first n values (n the number of vertices on the surface of the mesh)
-     *  are copied back from the v:temperature vertex property. Other values are simply initialized to 0.
-     * @param n_vertices Number of vertices in the tetrahedralized mesh.
-     */
-    void init_temperatures(const unsigned int n_vertices){
-        if(!init_temp){
-            auto mesh_ = m_viewer->getMesh();
-            Eigen::VectorXd tmp_temps(n_vertices);
-            Surface_mesh::Vertex_property<Scalar> v_temp = mesh_->vertex_property<Scalar>("v:temperature",0.0);
-
-            // Store fist these temperatures
-            Index i = 0;
-            for(auto v: mesh_->vertices()){
-                i = v.idx();
-                tmp_temps(i) = v_temp[v];
-            }
-
-            for(Index j = i+1; j < n_vertices; ++j){
-                tmp_temps(j) = 0.0;
-            }
-
-            init_temp = true;
-
-            m_temperatures = tmp_temps;
-        }
-    }
-
-    /**
-     * Performs uniform Laplacian update of the temperatures of the mesh
-     */
-    void uniform_diffuse() {
-        cout << "Uniform diffusion with decay value : " << decay << " for " << diffusion_iterations << " iterations" <<  endl;
-
-
-        Surface_mesh::Vertex_around_vertex_circulator vv_c, vv_end;
-        double laplacian;
-        unsigned int w;
-        auto mesh_ = m_viewer->getMesh();
-
-
-        if(is_tetra) {
-            /// THIS PART IS EXPERIMENTAL: IT WORKS UPON TETRAHEDRONS TO APPLY COTAN LAPLACIAN
-            /// The goal of this code is to solve the well known equation (D^-1  - delta * M) P(t+1) = D^-1 P(t),
-            /// for P(t+1). M is the matrix of cotangent weights. D^-1 is the matrix of volumes (we work in 3D!).
-            /// P(t) is the matrix of temperatures, obviously.
+        const double one_ov_four(1.0/4.0);
+        const double one_ov_six(1.0/6.0);
+        if(is_tetra){
+            /// This code solves the equation (D^-1  - delta * L) P(t+1) = D^-1 P(t),
+            /// for P(t+1). L is the matrix of cotangent weights. D^-1 is the mass-matrix of volumes (denoted M from here on).
+            /// P(t) is the matrix of temperatures.
 
             const ProjDyn::Tetrahedrons &tets = m_simulator.getTetrahedrons();
+            const ProjDyn::Positions &pos = m_simulator.getPositions();
 
-            /// Computes the cotangent matrix M
-            Eigen::SparseMatrix<double> M;
-            igl::cotmatrix(m_simulator.getPositions(), m_simulator.getTetrahedrons(), M);
+            /// Computes the cotangent matrix L
+            Eigen::SparseMatrix<double> L;
+            igl::cotmatrix(pos, m_simulator.getTetrahedrons(), L);
 
-            unsigned int n_vertices = M.rows();
+            unsigned int n_vertices = L.rows();
 
             /// If the full temperatures (i.e: for all vertices in the volume) are not initialized, this function will
             /// ensure it is the case, while preserving temperatures of the already existing vertices.
             /// Otherwise it does nothing.
             init_temperatures(n_vertices);
 
-            /// We must now compute D^-1 , which is our only missing quantity.
-            /// We will also compute D^-1 P(t), while we're at it, and store it as B=D^-1 P(t).
+            /// We must now compute M , which is our only missing quantity.
+            /// We will also compute M P(t), while we're at it, and store it as B=M P(t).
             std::vector<Eigen::Triplet<double> > triplets;
             Eigen::MatrixXd B(n_vertices, 1);
 
-            for (Index j = 0; j < n_vertices; ++j) {
-                triplets.push_back(Eigen::Triplet<double>(j, j, 1.0));
-                B(j) = m_temperatures(j);
+            unsigned int n_tetra = tets.rows();
+
+            double volumes[n_vertices];
+
+            // Just making sure volumes is zero-initialized (should be per C++ standard, but you never know)
+            for(Index j = 0; j < n_vertices; ++j){
+                volumes[j] = 0.0;
             }
-            Eigen::SparseMatrix<double> D(n_vertices, n_vertices); // The reason we store in a sparse matrix is to enable operations with M per Eigen specifications
-            D.setFromTriplets(triplets.begin(), triplets.end());
 
-            double diff_timestep(0.499999);
+            /// Fills in the volumes array, which sums up volume contributions of all tetrahedra containing a vertex i.
+            /// The volume of a tetrahedron is given by abs((a-d).((b-d) x (c-d)))/6
+            for(Index j = 0; j < n_tetra; ++j){
+                /// First get index of all vertices of tetrahedron
+                Index ind_a = tets(j,0);
+                Index ind_b = tets(j,1);
+                Index ind_c = tets(j,2);
+                Index ind_d = tets(j,3);
 
-            const auto &S = (D - diff_timestep * M); // Because all quantities are sparse, we can directly perform the following !
-            Eigen::SimplicialLLT<Eigen::SparseMatrix<double> > solver(S);
+                /// Then, extract the positions of all vertices
+                Vector<Scalar,3> a(pos(ind_a,0),
+                        pos(ind_a,1),
+                        pos(ind_a,2));
+                Vector<Scalar,3> b(pos(ind_b,0),
+                                  pos(ind_b,1),
+                                  pos(ind_b,2));
+                Vector<Scalar,3> c(pos(ind_c,0),
+                                  pos(ind_c,1),
+                                  pos(ind_c,2));
+                Vector<Scalar,3> d(pos(ind_d,0),
+                                  pos(ind_d,1),
+                                  pos(ind_d,2));
+
+                /// Finally compute the volume of tetrahedron
+                double volume = abs(dot(a-d, cross((b-d),(c-d))))*one_ov_six;
+
+                /// The sum for all vertices must be updated by the current volume
+                volumes[ind_a] += volume;
+                volumes[ind_b] += volume;
+                volumes[ind_c] += volume;
+                volumes[ind_d] += volume;
+            }
+
+            /// The mass matrix M is computed, as well as the righthand side M*P^(t)=B
+            for (Index j = 0; j < n_vertices; ++j) {
+                double mii = volumes[j]*one_ov_four;
+                triplets.push_back(Eigen::Triplet<double>(j, j, mii));
+                double tmp = mii*m_temperatures(j);
+                assert(!isnan(tmp)); // NaN values are unacceptable here, as volume should always be defined along with temperature.
+                B(j) = tmp;
+            }
+
+            /// The mass matrix M should be sparse (more efficient)
+            Eigen::SparseMatrix<double> M(n_vertices, n_vertices); // The reason we store in a sparse matrix is to enable operations with L per Eigen specifications
+            M.setFromTriplets(triplets.begin(), triplets.end());
+
+            double diff_timestep(0.001);
+
+            const auto &S = (M - diff_timestep * L); // Because all quantities are sparse, we can directly perform the following !
+            Eigen::SimplicialLLT<Eigen::SparseMatrix<double>> solver(S);
             assert(solver.info() == Eigen::Success);
 
-            /// The solver of the form Ax = B received A = (D^-1 - delta M). We give it B= D^-1 P(t), to retrieve at last P(t+1)
+            /// The solver of the form Ax = B received A = (M - delta L). We give it B= M P(t), to retrieve at last P(t+1)
             Eigen::MatrixXd P = solver.solve(B).eval(); // these are the new temperatures!
 
             /// All that remains is to update the temperatures as well as the displayed temperatures!
             Surface_mesh::Vertex_property<Scalar> v_temp = mesh_->vertex_property<Scalar>("v:temperature", 0.0);
             auto v = mesh_->vertices().begin();
             for (Index i = 0; i < n_vertices; ++i) {
-                m_temperatures(i) = P(i, 0);
-                if (v != mesh_->vertices().end()) {
-                    v_temp[*v] = P(i, 0);
-                    ++v;
+                double r = P(i, 0);
+                /// Should temperatures somehow become nan, it means the solver failed, which happens if S is not positive definite.
+                /// It was observed that this consistently happens after thousands of iterations where the system is more or less settled.
+                /// Therefore, it could be numerical errors piling up until the system is no more defined. For this reason, if a nan is found
+                /// it is simply ignored, so that the system remains stable.
+                if (!isnan(r)) {
+                    m_temperatures(i) = r;
+                    if (v != mesh_->vertices().end()) {
+                        v_temp[*v] = r;
+                        assert(!isnan(v_temp[*v]));
+                        ++v;
+                    }
+                } else {
+                    cout << "Reached NaN value (matrix not positive definite)" << endl;
                 }
             }
+        }else {
+
+            Surface_mesh::Vertex_property<Scalar> v_new_temp = mesh_->vertex_property<Scalar>("v:new_temperatures");
+            Surface_mesh::Vertex_property<bool> v_is_source = mesh_->vertex_property<bool>("v:is_source", false);
+            Surface_mesh::Vertex_property<Scalar> v_temp = mesh_->vertex_property<Scalar>("v:temperature", 0.0);
+            Surface_mesh::Edge_property<Scalar> e_weight = mesh_->edge_property<Scalar>("e:weight", 0.0f);
+            for (unsigned int iter = 0; iter < diffusion_iterations; ++iter) {
+                // For each non-boundary vertex, update its temperature according to the cotan Laplacian operator
+                calc_weights();
+                applySmoothing(*mesh_, v_new_temp, LaplacianType::COTAN, e_weight, v_is_source, v_temp);
+            }
+        }
+
+        m_viewer->setTemperatureColor();
+
+    }
+
+
+    /**
+     * Performs uniform Laplacian update of the temperatures of the mesh
+     */
+    void uniform_diffuse() {
+        Surface_mesh::Vertex_around_vertex_circulator vv_c, vv_end;
+        double laplacian;
+        unsigned int w;
+        auto mesh_ = m_viewer->getMesh();
+        double one_ov_four=1.0/4.0;
+
+        if(is_tetra) {
+            throw std::invalid_argument("Not implemented for simple case (try cotan instead)");
         } else {
             Surface_mesh::Vertex_property<Scalar> v_new_temp = mesh_->vertex_property<Scalar>("v:new_temperatures");
             Surface_mesh::Vertex_property<bool> v_is_source = mesh_->vertex_property<bool>("v:is_source", false);

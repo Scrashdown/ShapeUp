@@ -161,6 +161,10 @@ namespace ProjDyn {
             m_rest_length = (positions.row(m_vertex_indices[1]) - positions.row(m_vertex_indices[0])).norm();
         }
 
+        virtual void setRestLength(const Scalar &new_length){
+            m_rest_length = new_length;
+        }
+
         virtual void project(const Positions& positions, Positions& projection) override {
             // Check for correct size of the projection auxiliary variable;
             assert(projection.rows() > m_constraint_id);
