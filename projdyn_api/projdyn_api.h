@@ -593,11 +593,7 @@ public:
                 const Scalar t1 = v_temperature[v1];
                 const Scalar avgTemp = 0.5 * (t0 + t1);
 
-                if (avgTemp >= 200) {
-                    c->setWeight(0.001f);
-                } else {
-                    c->setWeight(edgeLen);
-                }
+                c->setWeight(1.0 / (avgTemp + 1.0));
             }
         }
     }
@@ -709,13 +705,13 @@ public:
         std::vector<ProjDyn::VertexStar>& vStars = m_vertexStars;
         ProjDyn::Vector voronoiAreas = ProjDyn::vertexMasses(m_simulator.getPositions(), m_simulator.getTriangles());
         Surface_mesh* smesh = m_viewer->getMesh();
+        Surface_mesh::Vertex_property<Scalar> v_temperature = smesh->vertex_property<Scalar>("v:temperature", 0.0);
         for (auto v : smesh->vertices()) {
             Index i = v.idx();
             if (std::find(vertInds.begin(), vertInds.end(), i) == vertInds.end()) continue;
             if (smesh->is_boundary(v)) continue;
             if (i >= m_simulator.getNumOuterVerts()) continue;
-            // The weight is the voronoi area
-            ProjDyn::Scalar w = voronoiAreas(i) * 0.01;
+            ProjDyn::Scalar w = (1.0 / (v_temperature[v] + 1.0));
             if (w > 1e-6) {
                 // The constraint is constructed, made into a shared pointer and appended to the list
                 // of constraints.
