@@ -542,8 +542,6 @@ public:
 
         /// Voronoi areas are necessary to update mean curvature!
         ProjDyn::Vector voronoiAreas = ProjDyn::vertexMasses(m_simulator.getPositions(), m_simulator.getTriangles());
-
-        cout << "Ok, go" <<endl;
         // Find group of temperature based constraints, return false if it doesn't exist
         auto elem = groups.find("Edge Temperature Elasticity");
         if (elem != groups.end()) {
@@ -607,12 +605,6 @@ public:
 
                 if(vIndices.size() != 0){
                     avgTemp /= vIndices.size();
-                }
-                /// If the temperature is above the threshold, plastic deformation.
-                if (avgTemp >= 200) {
-                    std::shared_ptr<ProjDyn::BendingConstraint> p_deri = std::dynamic_pointer_cast<ProjDyn::BendingConstraint>(c);
-                    Index v_id = p_deri->getCenterVertexId();
-                    p_deri->setMeanCurvature(voronoiAreas(v_id), curr_pos);
                 }
                 c->setWeight(1.0 / (avgTemp + 1.0));
             }
@@ -1189,6 +1181,8 @@ private:
 
         const double one_ov_four(1.0/4.0);
         const double one_ov_six(1.0/6.0);
+        const auto v_lookup_table = m_viewer->getVertexLookupTable();
+
         if(is_tetra){
             /// This code solves the equation (D^-1  - delta * L) P(t+1) = D^-1 P(t),
             /// for P(t+1). L is the matrix of cotangent weights. D^-1 is the mass-matrix of volumes (denoted M from here on).
@@ -1196,6 +1190,8 @@ private:
 
             const ProjDyn::Tetrahedrons &tets = m_simulator.getTetrahedrons();
             const ProjDyn::Positions &pos = m_simulator.getPositions();
+            Surface_mesh::Vertex_property<bool> v_is_source = mesh_->vertex_property<bool>("v:is_source", false);
+
 
             /// Computes the cotangent matrix L
             Eigen::SparseMatrix<double> L;
@@ -1280,6 +1276,7 @@ private:
             /// All that remains is to update the temperatures as well as the displayed temperatures!
             Surface_mesh::Vertex_property<Scalar> v_temp = mesh_->vertex_property<Scalar>("v:temperature", 0.0);
             auto v = mesh_->vertices().begin();
+            auto v_end = mesh_->vertices().end();
             for (Index i = 0; i < n_vertices; ++i) {
                 double r = P(i, 0);
                 /// Should temperatures somehow become nan, it means the solver failed, which happens if S is not positive definite.
@@ -1287,13 +1284,20 @@ private:
                 /// Therefore, it could be numerical errors piling up until the system is no more defined. For this reason, if a nan is found
                 /// it is simply ignored, so that the system remains stable.
                 if (!isnan(r)) {
-                    m_temperatures(i) = r;
-                    if (v != mesh_->vertices().end()) {
-                        v_temp[*v] = r;
-                        assert(!isnan(v_temp[*v]));
+                    if(v!=v_end){
+                        if(!v_is_source[*v]){
+                            m_temperatures(i) = r;
+                            v_temp[*v] = r;    
+                        }
+                        ++v;
+                    } else {
+                        m_temperatures(i) = r;
+                    }
+                    
+                } else {
+                    if(v!=v_end){
                         ++v;
                     }
-                } else {
                     cout << "Reached NaN value (matrix not positive definite)" << endl;
                 }
             }

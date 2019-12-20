@@ -316,7 +316,7 @@ public:
         }
 
         /** Converts temperature scalar to color vector **/
-        color_coding(v_temperature, &mesh, v_color_temperature,20000);
+        color_coding(v_temperature, &mesh, v_color_temperature,400);
 
         int j = 0;
         MatrixXf mesh_points(3, n_vertices);
