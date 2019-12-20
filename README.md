@@ -19,7 +19,7 @@ and on Redhead/Fedora, via:
 
 This project also relies on the libigl library to work, imported as a submodule. It may be done with the following command if needs be:
 
-    $ git submodule add https://github.com/libigl/libigl.git externals/libigl
+    $ git submodule update --init --recursive
 
 After that, simply build the project as usual:
 
