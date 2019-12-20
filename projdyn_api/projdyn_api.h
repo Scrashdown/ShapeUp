@@ -556,28 +556,9 @@ public:
                     v_temperature[v_lookup_table[vIndices[1]]] : m_temperatures[vIndices[1]];
 
                 const Scalar avgTemp = 0.5 * (t0 + t1);
-                if (avgTemp >= 200) {
-                    c->setWeight(0.0001f);
-                    std::shared_ptr<ProjDyn::EdgeSpringConstraint> p_deri = std::dynamic_pointer_cast<ProjDyn::EdgeSpringConstraint>(c);
-                    Scalar length = (curr_pos.row(vIndices[0]) - curr_pos.row(vIndices[1])).norm();
-                    p_deri->setRestLength(length);
-                    m_restLengths[i] = length;
-
-                } else {
-
-                    if(m_restLengths.count(i) > 0){
-                        c->setWeight(m_restLengths[i]);
-                    } else {
-                        const Scalar edgeLen = (sim_verts.row(vIndices[0]) - sim_verts.row(vIndices[1])).norm();
-                        c->setWeight(edgeLen);
-                        m_restLengths[i] = edgeLen;
-                    }
-
-                }
+                c->setWeight(1.0 / (avgTemp + 1.0));
                 ++i;
             }
-        } else {
-            std::cout << "Warning: no temperature elasticity constraint group found." << std::endl;
         }
 
         // Find group of triangle bending constraints
@@ -601,8 +582,6 @@ public:
                     c->setWeight(edgeLen);
                 }
             }
-        } else {
-            std::cout << "Warning: no tri-bending constraint group found." << std::endl;
         }
     }
 
@@ -769,16 +748,19 @@ public:
             const ProjDyn::Positions& sim_verts = m_simulator.getInitialPositions();
             const ProjDyn::Triangles& tris = m_simulator.getTriangles();
             Surface_mesh* smesh = m_viewer->getMesh();
+            Surface_mesh::Vertex_property<Scalar> v_temperature = smesh->vertex_property<Scalar>("v:temperature", 0.0);
             std::vector<ProjDyn::ConstraintPtr> spring_constraints;
             for (auto edge : smesh->edges()) {
                 // The weight is set to the edge length
                 ProjDyn::Scalar w = (sim_verts.row(smesh->vertex(edge, 0).idx()) - sim_verts.row(smesh->vertex(edge, 1).idx())).norm();
+                const auto v0 = smesh->vertex(edge, 0);
+                const auto v1 = smesh->vertex(edge, 1);
                 if (w > 1e-6) {
                     // The constraint is constructed, made into a shared pointer and appended to the list
                     // of constraints.
                     std::vector<Index> edge_inds;
-                    edge_inds.push_back(smesh->vertex(edge, 0).idx());
-                    edge_inds.push_back(smesh->vertex(edge, 1).idx());
+                    edge_inds.push_back(v0.idx());
+                    edge_inds.push_back(v1.idx());
                     ProjDyn::EdgeSpringConstraint* esc = new ProjDyn::EdgeSpringConstraint(edge_inds, w, sim_verts);
                     spring_constraints.push_back(std::shared_ptr<ProjDyn::EdgeSpringConstraint>(esc));
                 }
@@ -799,19 +781,19 @@ public:
             Surface_mesh::Vertex_property<Scalar> v_temperature = smesh->vertex_property<Scalar>("v:temperature", 0.0);
             std::vector<ProjDyn::ConstraintPtr> spring_constraints;
             for (auto edge : smesh->edges()) {
-                /** NEW: w = edge_len / (1 + avg.temp) **/
-                ProjDyn::Scalar w = (sim_verts.row(smesh->vertex(edge, 0).idx()) - sim_verts.row(smesh->vertex(edge, 1).idx())).norm();
-                const Scalar t0 = v_temperature[smesh->vertex(edge, 0)];
-                const Scalar t1 = v_temperature[smesh->vertex(edge, 1)];
-                const Scalar edgeTemp = 0.5 * (t0 + t1);
-                w /= (1.0 + edgeTemp);
+                const auto v0 = smesh->vertex(edge, 0);
+                const auto v1 = smesh->vertex(edge, 1);
+                const auto t0 = v_temperature[v0];
+                const auto t1 = v_temperature[v1];
+                const Scalar avgTemp = 0.5 * (t0 + t1);
+                const ProjDyn::Scalar w = 1.0 / (avgTemp + 1.0);
 
                 if (w > 1e-6) {
                     // The constraint is constructed, made into a shared pointer and appended to the list
                     // of constraints.
                     std::vector<Index> edge_inds;
-                    edge_inds.push_back(smesh->vertex(edge, 0).idx());
-                    edge_inds.push_back(smesh->vertex(edge, 1).idx());
+                    edge_inds.push_back(v0.idx());
+                    edge_inds.push_back(v1.idx());
                     ProjDyn::EdgeSpringConstraint* esc = new ProjDyn::EdgeSpringConstraint(edge_inds, w, sim_verts);
                     spring_constraints.push_back(std::shared_ptr<ProjDyn::EdgeSpringConstraint>(esc));
                 }
@@ -934,7 +916,11 @@ private:
                 // Easy way to make sure each edge only gets added once:
                 if (edge[0] < edge[1]) {
                     // The weight is set to the edge length
-                    ProjDyn::Scalar w = (sim_verts.row(edge[0]) - sim_verts.row(edge[1])).norm();
+                    const Scalar length = (sim_verts.row(edge[0]) - sim_verts.row(edge[1])).norm();
+                    const auto t0 = m_temperatures[tets(i, j)];
+                    const auto t1 = m_temperatures[tets(i, (j + 1) % 4)];
+                    const Scalar avgTemp = 0.5 * (t0 + t1);
+                    const ProjDyn::Scalar w = 1.0 / (avgTemp + 1.0);
                     if (w > 1e-6) {
                         // The constraint is constructed, made into a shared pointer and appended to the list
                         // of constraints.

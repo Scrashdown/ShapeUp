@@ -317,9 +317,6 @@ namespace ProjDyn {
 			if (!m_lhs_updated) {
 				std::cout << "WARNING: could not initialize system, LHS matrix not pos.def.? (Possibly not all vertices take part in constraints?)" << std::endl;
             }
-            else {
-                std::cout << "Successfully recomputed and refactorized LHS of global step" << std::endl;
-            }
 
 			return m_lhs_updated;
 		}
