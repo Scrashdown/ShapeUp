@@ -28,6 +28,7 @@ public:
     const int  NUM_ITS_INITIAL = 10;
     const int  FPS = 60;
     const bool DYNAMIC_MODE = true;
+    int positionGroupConstraintsNum = 1;
 
     /** NEW values for diffusion : button toggling */
     bool diff_activated = false;
@@ -637,6 +638,7 @@ public:
     // Remove all constraints from the simulation.
     void clearConstraints() {
         m_simulator.clearConstraints();
+        positionGroupConstraintsNum = 1;
     }
 
     // In the following are several helper function to add several types of specific
@@ -817,8 +819,10 @@ public:
         // Create constraint groups and add them to the simulation
         std::shared_ptr<ProjDyn::PositionConstraintGroup> con = std::shared_ptr<ProjDyn::PositionConstraintGroup>(new ProjDyn::PositionConstraintGroup(selected_verts, weight, con_pos));
 
-        auto conGroup = std::make_shared<ProjDyn::ConstraintGroup>("Fixed Pos.", std::vector<ProjDyn::ConstraintPtr>({ con }), 1.);
+        string groupName = "Fixed Pos.";
+        auto conGroup = std::make_shared<ProjDyn::ConstraintGroup>(groupName + to_string(positionGroupConstraintsNum), std::vector<ProjDyn::ConstraintPtr>({ con }), 1.);
         addConstraints(conGroup);
+        positionGroupConstraintsNum++;
     }
 
     // Gets called when the user is grabbing some vertices with the mouse
