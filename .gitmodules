@@ -1,3 +1,6 @@
 [submodule "externals/libigl"]
 	path = externals/libigl
 	url = https://github.com/libigl/libigl.git
+[submodule "externals/nanogui"]
+	path = externals/nanogui
+	url = https://github.com/wjakob/nanogui
