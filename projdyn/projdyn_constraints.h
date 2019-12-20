@@ -484,11 +484,12 @@ namespace ProjDyn {
     class BendingConstraint : public Constraint {
     public:
         BendingConstraint(VertexStar vertexStar, Scalar weight, Scalar voronoiArea,
-            const Positions& positions, const Triangles& triangles) 
+            const Positions& positions, const Triangles& triangles, const Index& vertexId)
             :
             Constraint(getStarIndices(vertexStar), weight)
         {
             m_vertex_star = vertexStar;
+            m_vertex_id = vertexId;
 
             // Compute cotan weights and collect list of triangles in 1-ring
             Vector cotanWeights(m_vertex_star.size());
@@ -551,6 +552,55 @@ namespace ProjDyn {
             }
         }
 
+        virtual Index getCenterVertexId() const { return m_vertex_id; }
+
+        virtual void setMeanCurvature(Scalar voronoiArea,
+                                      const Positions& positions) {
+
+            // Compute cotan weights and collect list of triangles in 1-ring
+            Vector cotanWeights(m_vertex_star.size());
+            int nb = 0, nb2 = 0;
+
+            for (Edge& e : m_vertex_star) {
+                Vector3 edgeT11 = (positions.row(m_vertex_indices[0]) - positions.row(e.vOtherT1));
+                Vector3 edgeT12 = (positions.row(e.v2) - positions.row(e.vOtherT1));
+                Scalar angle1 = std::acos(edgeT11.dot(edgeT12) / (edgeT11.norm() * edgeT12.norm()));
+                Scalar cotWeight = (.5 / std::tan(angle1));
+                if (e.t2 > 0) {
+                    Vector3 edgeT21 = (positions.row(m_vertex_indices[0]) - positions.row(e.vOtherT2));
+                    Vector3 edgeT22 = (positions.row(e.v2) - positions.row(e.vOtherT2));
+                    Scalar angle2 = std::acos(edgeT21.dot(edgeT22) / (edgeT21.norm() * edgeT22.norm()));
+                    cotWeight += (.5 / std::tan(angle2));
+                }
+
+                cotanWeights(nb) = cotWeight / voronoiArea;
+            }
+
+            // Store cotan weights
+            m_cotan_weights = cotanWeights;
+
+            // Compute and store mean-curvature (vector)
+            Eigen::Matrix<Scalar, 1, 3> meanCurvatureVector;
+            meanCurvatureVector.setZero();
+            nb = 0;
+            for (Edge e : m_vertex_star) {
+                meanCurvatureVector += (positions.row(m_vertex_indices[0]) - positions.row(e.v2)) * cotanWeights(nb);
+                nb++;
+            }
+            m_rest_mean_curv_vec = meanCurvatureVector;
+            m_rest_mean_curv = meanCurvatureVector.norm();
+
+            // Compute and store the dot product of the mean curvature vector with the
+            // normal.
+            Vector3 triNormal = getTriangleNormal(m_triangles, positions);
+            m_dot_with_normal = triNormal.dot(meanCurvatureVector);
+
+            if (m_cotan_weights.hasNaN()) {
+                std::cout << "NaN value in cotan weights!" << std::endl;
+            }
+
+        }
+
         virtual void project(const Positions& positions, Positions& projection) override {
             if (m_rest_mean_curv < 1e-12) {
                 projection.row(m_constraint_id).setZero();
@@ -596,6 +646,7 @@ namespace ProjDyn {
         Vector m_cotan_weights;
         Scalar m_dot_with_normal;
         Scalar m_rest_mean_curv;
+        Index m_vertex_id;
         Eigen::Matrix<Scalar, 1, 3> m_rest_mean_curv_vec;
         Triangles m_triangles;
         virtual std::vector<Triplet> getTriplets(Index currentRow) override {
@@ -616,7 +667,7 @@ namespace ProjDyn {
     public:
         FlatteningConstraint(VertexStar vertexStar, Scalar weight, Scalar voronoiArea,
             const Positions& positions, const Triangles& triangles)
-            : BendingConstraint(vertexStar, weight, voronoiArea, positions, triangles) {};
+            : BendingConstraint(vertexStar, weight, voronoiArea, positions, triangles,0) {};
 
         virtual void project(const Positions& positions, Positions& projection) override {
             projection.row(m_constraint_id).setZero();

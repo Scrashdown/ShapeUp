@@ -556,13 +556,18 @@ public:
                     v_temperature[v_lookup_table[vIndices[1]]] : m_temperatures[vIndices[1]];
 
                 const Scalar avgTemp = 0.5 * (t0 + t1);
+                /// The viscosity decreases with temperature. For wax, this is almost a 1/x relationship
                 c->setWeight(1.0 / (avgTemp + 1.0));
 
+                /// Get an EdgeSpringConstraint object to be able to modify the rest length appropriately
                 std::shared_ptr<ProjDyn::EdgeSpringConstraint> p_deri = std::dynamic_pointer_cast<ProjDyn::EdgeSpringConstraint>(c);
                 Scalar length;
+
+                /// If the temperature is above some threshold, the deformation is plastic. The length becomes the current - deformed - length
                 if (avgTemp >= 200) {
                     length=(curr_pos.row(vIndices[0]) - curr_pos.row(vIndices[1])).norm();
                 } else {
+                    /// Should the rest length not be initialized (first iteration typically), it is put to the length of the edge
                     if (m_restLengths.count(i) == 0) {
                         length = (sim_verts.row(vIndices[0]) - sim_verts.row(vIndices[1])).norm();
 
@@ -570,7 +575,7 @@ public:
                         length = m_restLengths[i];
                     }
                 }
-
+                /// Update the length of the constraint and the table of rest lengths
                 p_deri->setRestLength(length);
                 m_restLengths[i] = length;
 
@@ -582,21 +587,27 @@ public:
         elem = groups.find("Tri Bending");
         if (elem != groups.end()) {
             const auto cg = elem->second;
+            /// Voronoi areas are necessary to update mean curvature!
+            ProjDyn::Vector voronoiAreas = ProjDyn::vertexMasses(m_simulator.getPositions(), m_simulator.getTriangles());
+
             // Recompute weight of each constraint in the group
             for (const auto c: cg->constraints) {
+
+                /// Computes average temperature in neighbourhood for the constraint
                 const std::vector<Index>& vIndices = c->getIndices();
-                const Scalar edgeLen = (sim_verts.row(vIndices[0]) - sim_verts.row(vIndices[1])).norm();
-                const auto v0 = v_lookup_table[vIndices[0]];
-                const auto v1 = v_lookup_table[vIndices[1]];
+                Scalar avgTemp(0.0);
+                for(auto index: vIndices){
+                    avgTemp += v_temperature[v_lookup_table[vIndices[index]]];
+                }
 
-                const Scalar t0 = v_temperature[v0];
-                const Scalar t1 = v_temperature[v1];
-                const Scalar avgTemp = 0.5 * (t0 + t1);
-
+                if(vIndices.size() != 0){
+                    avgTemp /= vIndices.size();
+                }
+                /// If the temperature is above the threshold, plastic deformation.
                 if (avgTemp >= 200) {
-                    c->setWeight(0.001f);
-                } else {
-                    c->setWeight(edgeLen);
+                    std::shared_ptr<ProjDyn::BendingConstraint> p_deri = std::dynamic_pointer_cast<ProjDyn::BendingConstraint>(c);
+                    Index v_id = p_deri->getCenterVertexId();
+                    p_deri->setMeanCurvature(voronoiAreas(v_id), curr_pos);
                 }
             }
         }
@@ -719,7 +730,7 @@ public:
             if (w > 1e-6) {
                 // The constraint is constructed, made into a shared pointer and appended to the list
                 // of constraints.
-                ProjDyn::BendingConstraint* esc = new ProjDyn::BendingConstraint(vStars[i], w, voronoiAreas(i), sim_verts, m_simulator.getTriangles());
+                ProjDyn::BendingConstraint* esc = new ProjDyn::BendingConstraint(vStars[i], w, voronoiAreas(i), sim_verts, m_simulator.getTriangles(), i);
                 bend_constraints.push_back(std::shared_ptr<ProjDyn::BendingConstraint>(esc));
             }
         }
